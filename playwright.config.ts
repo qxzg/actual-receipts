@@ -1,0 +1,2 @@
+import { defineConfig } from '@playwright/test';
+export default defineConfig({testDir:'./tests/browser',fullyParallel:false,workers:1,timeout:60000,use:{baseURL:'http://localhost:3199',launchOptions:{executablePath:'/usr/bin/chromium',args:['--no-sandbox']},trace:'retain-on-failure'},webServer:{command:'npx tsx tests/e2e-server.ts',url:'http://localhost:3199/healthz',reuseExistingServer:false,timeout:30000},reporter:[['list'],['html',{open:'never'}]]});

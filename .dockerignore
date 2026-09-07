@@ -1,0 +1,13 @@
+node_modules
+.git
+.agents
+.codex
+.env
+secrets
+data
+backups
+artifacts
+test-results
+playwright-report
+test1.jpg
+test2.jpg

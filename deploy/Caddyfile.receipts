@@ -1,0 +1,9 @@
+receipts.hx-sun.com {
+    encode zstd gzip
+    request_body {
+        max_size 130MB
+    }
+    reverse_proxy receipt-app:3100 {
+        header_up X-Forwarded-For {remote_host}
+    }
+}

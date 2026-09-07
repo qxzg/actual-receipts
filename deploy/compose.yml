@@ -1,0 +1,86 @@
+name: receipts
+services:
+  receipt-app:
+    image: receipt-app:0.1.0
+    restart: unless-stopped
+    init: true
+    user: "1000:1000"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 512m
+    memswap_limit: 512m
+    pids_limit: 128
+    environment:
+      APP_ORIGIN: ${APP_ORIGIN:-https://receipts.hx-sun.com}
+      HOST: 0.0.0.0
+      PORT: 3100
+      DATA_DIR: /data
+      MASTER_KEY_FILE: /run/secrets/master-key
+      PROVIDER_TOKEN_FILE: /run/secrets/provider-token
+      PROVIDER_URL: http://codex-provider:3101
+      TRUSTED_PROXY: ${TRUSTED_PROXY:-172.18.0.3}
+      NODE_OPTIONS: --max-old-space-size=220
+    volumes:
+      - ./data:/data
+    secrets: [master-key, provider-token]
+    tmpfs: ["/tmp:size=64m,mode=1777"]
+    networks: [actual, provider]
+    depends_on:
+      codex-provider:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:3100/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    logging: &logging
+      driver: json-file
+      options: {max-size: 5m, max-file: '3'}
+  codex-provider:
+    image: codex-provider:0.1.0
+    restart: unless-stopped
+    init: true
+    user: "1000:1000"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 512m
+    memswap_limit: 512m
+    pids_limit: 96
+    environment:
+      PORT: 3101
+      CODEX_HOME: /data/codex
+      PROVIDER_TOKEN_FILE: /run/secrets/provider-token
+      NODE_OPTIONS: --max-old-space-size=180
+    volumes:
+      - ./codex-data:/data/codex
+      - type: bind
+        source: /etc/ssl/certs/ca-certificates.crt
+        target: /etc/ssl/certs/ca-certificates.crt
+        read_only: true
+        bind:
+          create_host_path: false
+    secrets: [provider-token]
+    tmpfs: ["/tmp:size=64m,mode=1777"]
+    networks: [provider, egress]
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:3101/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    logging: *logging
+networks:
+  actual:
+    external: true
+    name: ${ACTUAL_NETWORK:-actual_default}
+  provider:
+    internal: true
+  egress: {}
+secrets:
+  master-key:
+    file: ./secrets/master-key
+  provider-token:
+    file: ./secrets/provider-token

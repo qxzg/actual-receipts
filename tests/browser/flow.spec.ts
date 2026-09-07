@@ -1,0 +1,42 @@
+import { test, expect } from '@playwright/test';
+import { readFileSync } from 'node:fs';
+import sharp from 'sharp';
+
+test('real WebAuthn registration, recognition, scoped allocation, duplicate confirmation and recovery',async({page,context})=>{
+  await page.route('**/api/settings/models',async route=>{const body=route.request().postDataJSON();const models=body.provider==='codex'?[{id:'fixture-model',name:'Fixture Vision',description:'测试图片模型，用于验证下拉选择。',isDefault:true,vision:true},{id:'fixture-fast',name:'Fixture Fast',description:'快速识别清晰小票。',isDefault:false,vision:true}]:[{id:'api-vision',name:'API Vision',description:'兼容服务商的图片模型。',isDefault:false,vision:null}];await route.fulfill({json:{models}});});
+  let lastLogin:any; page.on('request',r=>{if(r.url().endsWith('/api/auth/login/verify')) lastLogin=r.postDataJSON();});
+  const client=await context.newCDPSession(page);await client.send('WebAuthn.enable');
+  let auth=await client.send('WebAuthn.addVirtualAuthenticator',{options:{protocol:'ctap2',transport:'internal',hasResidentKey:true,hasUserVerification:true,isUserVerified:true,automaticPresenceSimulation:true}});
+  await page.goto('/');await page.getByLabel('初始化令牌',{exact:true}).fill(readFileSync('/tmp/receipts-e2e-bootstrap','utf8'));
+  await page.getByRole('button',{name:'继续',exact:true}).click();await page.getByRole('button',{name:'创建 Passkey',exact:true}).click();
+  await expect(page.getByRole('heading',{name:'保存这 10 个恢复码'})).toBeVisible();
+  const recovery=(await page.locator('.codes code').allTextContents())[0];
+  await page.getByRole('button',{name:'已安全保存'}).click();await expect(page.getByRole('heading',{name:'我的小票',exact:true})).toBeVisible();
+  await page.screenshot({path:'artifacts/desktop-list.png',fullPage:true});
+  // Logout then authenticate using a discoverable credential.
+  await page.getByRole('button',{name:'退出',exact:true}).click();await page.getByRole('button',{name:/使用 Passkey 登录/}).click();await expect(page.getByRole('heading',{name:'我的小票',exact:true})).toBeVisible();
+  const authState=await (await page.request.get('/api/auth/state')).json();
+  const replay=await page.request.post('/api/auth/login/verify',{headers:{origin:'http://localhost:3199','x-csrf-token':authState.csrf},data:lastLogin});expect(replay.status()).toBe(400);
+  const badOrigin=await page.request.post('/api/auth/login/options',{headers:{origin:'https://evil.example','x-csrf-token':authState.csrf},data:{}});expect(badOrigin.status()).toBe(403);
+  const image=await sharp(Buffer.from('<svg width="800" height="1200"><rect width="800" height="1200" fill="white"/><text x="50" y="100" font-size="40">TEST RECEIPT</text><text x="50" y="200" font-size="30">MILK 2 x 3.99</text><text x="50" y="260" font-size="30">TOWEL 4.99</text><text x="50" y="320" font-size="30">DISCOUNT -1.00</text><text x="50" y="380" font-size="30">TAX .99</text><text x="50" y="480" font-size="40">TOTAL 12.96</text></svg>')).png().toBuffer();
+  const upload=async()=>{
+    await page.getByLabel('付款账户',{exact:true}).selectOption('bank');await page.getByLabel('小票图片',{exact:true}).setInputFiles([{name:'receipt-top.png',mimeType:'image/png',buffer:image},{name:'receipt-bottom.png',mimeType:'image/png',buffer:image}]);await page.getByRole('button',{name:/上传并核对/}).click();await page.getByRole('button',{name:'识别小票',exact:true}).click();await expect(page.getByLabel('商品 1 名称',{exact:true})).toHaveValue('鲜牛奶',{timeout:15000});await page.getByLabel('已核对这笔税费的应税商品范围').check();await page.getByLabel('我已根据原图核对这些疑点').check();
+  };
+  await upload();await page.screenshot({path:'artifacts/desktop-review.png',fullPage:true});
+  await page.setViewportSize({width:390,height:844});await page.screenshot({path:'artifacts/mobile-review.png',fullPage:true});
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth)).toBe(true);
+  await page.getByRole('button',{name:/小票原图/}).click();await expect(page.getByAltText('小票第 1 张')).toBeVisible();await page.getByRole('button',{name:'商品明细',exact:true}).click();
+  await page.getByRole('button',{name:/核对完成，写入 Actual/}).click();await expect(page.getByText(/已写入 Actual ·/)).toBeVisible({timeout:15000});await expect(page.getByText(/图片已清理，商品明细已保留/)).toBeVisible({timeout:15000});
+  await page.getByRole('button',{name:'返回小票',exact:false}).click();await upload();await page.getByRole('button',{name:/核对完成，写入 Actual/}).click();await expect(page.getByRole('heading',{name:'发现可能重复的交易'})).toBeVisible();await page.getByRole('button',{name:'仍然新建'}).click();await expect(page.getByText(/已写入 Actual ·/)).toBeVisible({timeout:15000});
+  await page.getByRole('button',{name:'设置',exact:true}).click();await page.request.post('/__test/expire-verification');await page.getByRole('button',{name:'验证身份',exact:true}).click();await expect(page.getByText('身份验证完成，5 分钟内可修改安全设置')).toBeVisible();await client.send('WebAuthn.removeVirtualAuthenticator',{authenticatorId:auth.authenticatorId});auth=await client.send('WebAuthn.addVirtualAuthenticator',{options:{protocol:'ctap2',transport:'internal',hasResidentKey:true,hasUserVerification:true,isUserVerified:true,automaticPresenceSimulation:true}});await page.getByLabel('新 Passkey 名称').fill('备用设备');await page.getByRole('button',{name:'添加 Passkey',exact:true}).click();await expect(page.getByText('备用设备',{exact:true})).toBeVisible();
+  await expect(page.getByRole('combobox',{name:'识别模型',exact:true})).toHaveValue('fixture-model');
+  await page.getByRole('combobox',{name:'识别模型',exact:true}).selectOption('fixture-fast');
+  await expect(page.locator('#model-description')).toHaveText('快速识别清晰小票。');
+  await page.getByRole('button',{name:'保存识别设置',exact:true}).click();await expect(page.getByText('识别设置已保存',{exact:true})).toBeVisible();
+  await expect(page.getByRole('textbox',{name:'模型名称',exact:true})).toHaveCount(0);
+  await page.screenshot({path:'artifacts/mobile-settings.png',fullPage:true});
+  await page.getByRole('button',{name:'退出',exact:true}).click();await page.getByRole('button',{name:'使用恢复码或服务器恢复令牌'}).click();await page.getByLabel('恢复凭据',{exact:true}).fill(recovery);await page.getByRole('button',{name:'继续',exact:true}).click();
+  // Emulate losing the old physical device; replace it before registering the recovery key.
+  await client.send('WebAuthn.removeVirtualAuthenticator',{authenticatorId:auth.authenticatorId});await client.send('WebAuthn.addVirtualAuthenticator',{options:{protocol:'ctap2',transport:'internal',hasResidentKey:true,hasUserVerification:true,isUserVerified:true,automaticPresenceSimulation:true}});
+  await page.getByLabel('Passkey 名称',{exact:true}).fill('恢复后的 Passkey');await page.getByRole('button',{name:'创建 Passkey',exact:true}).click();await expect(page.getByRole('heading',{name:'保存这 10 个恢复码'})).toBeVisible();await page.getByRole('button',{name:'已安全保存'}).click();await page.getByRole('button',{name:'设置',exact:true}).click();await expect(page.getByText('恢复后的 Passkey',{exact:true})).toBeVisible();await expect(page.getByText('备用设备',{exact:true})).toHaveCount(0);
+});

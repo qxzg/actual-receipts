@@ -1,0 +1,17 @@
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { createApp } from '../src/server/app.js';
+import { Store, now } from '../src/server/db.js';
+import { emptyDraft } from '../src/shared/receipt.js';
+const dir=mkdtempSync(join(tmpdir(),'receipts-e2e-'));
+const store=new Store(dir,Buffer.alloc(32,3));
+const bootstrap=store.adminToken('bootstrap');
+writeFileSync('/tmp/receipts-e2e-bootstrap',bootstrap,{mode:0o600});
+store.setSetting('model',{provider:'codex',model:'fixture-model',baseURL:'',apiKey:'',protocol:'responses',structured:true});
+const transactions:any[]=[];
+const actual:any={connection:()=> 'fixture-budget', catalog:async()=>({accounts:[{id:'bank',name:'测试银行卡'}],categories:[{id:'grocery',name:'食品杂货'},{id:'home',name:'日用品'}],currency:'USD'}), duplicates:async(d:any)=>transactions.filter(t=>t.account===d.account&&t.amount===-d.total).map(t=>({id:t.id,date:t.date,amount:t.amount,payee:t.payee_name,notes:t.notes})),write:async(t:any)=>{transactions.push(t);return {id:t.id}},verify:async(t:any)=>({found:transactions.some(v=>v.id===t.id),valid:transactions.some(v=>v.id===t.id),id:t.id})};
+const recognizer:any={recognize:async()=>({...emptyDraft('USD','bank'),merchant:'邻里超市',date:'2026-09-06',total:1296,originalCurrency:'USD',items:[{id:'milk',name:'鲜牛奶',quantity:'2',unitPrice:399,amount:798,discount:0,category:'grocery'},{id:'towel',name:'厨房纸巾',quantity:'1',unitPrice:499,amount:499,discount:100,category:'home'}],adjustments:[{id:'tax',kind:'tax',label:'销售税',amount:99,scope:['towel'],confirmed:false}],warnings:['请核对销售税范围']})};
+const {app}=await createApp({origin:'http://localhost:3199',rpID:'localhost',dataDir:dir,key:Buffer.alloc(32,3),port:3199,host:'127.0.0.1',trustedProxy:false,providerUrl:'http://127.0.0.1:1',providerToken:'test'}, {store,actual,recognizer});
+app.post('/__test/expire-verification',async()=>{store.run('UPDATE sessions SET verified_at=?',now()-600000);return {ok:true}});
+await app.listen({host:'127.0.0.1',port:3199});
