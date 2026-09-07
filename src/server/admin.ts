@@ -14,6 +14,6 @@ try {
     const dest = resolve(process.argv[3] || 'backups/snapshot'); mkdirSync(dest, { recursive: true, mode: 0o700 });
     store.db.prepare('VACUUM INTO ?').run(join(dest, 'receipts.sqlite'));
     copyFileSync(process.env.MASTER_KEY_FILE || 'secrets/master-key', join(dest, 'master-key'));
-    console.log(`数据库快照已保存到 ${dest}。完整备份请使用 deploy/backup.sh，同时保留图片、Actual 缓存和 Codex 凭据。`);
+    console.log(`数据库快照已保存到 ${dest}。完整备份应同时保留图片、Actual 缓存、Codex 凭据和 Secret。`);
   } else throw new Error('用法：admin bootstrap | recover | check | snapshot <目录>');
 } finally { store.db.close(); }

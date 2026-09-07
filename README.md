@@ -1,96 +1,95 @@
 # 小票账本
 
-手机友好的中文私有记账工具：Passkey 登录 → 上传小票 → 选择付款账户 → 识别商品 → 核对分类与分摊 → 写入 Actual 拆分交易。
+面向单用户自托管环境的中文小票记账工具：Passkey 登录、上传小票、AI 识别、人工核对分类与分摊，最后写入 [Actual Budget](https://actualbudget.org/) 拆分交易。
 
-## 运行
+## 功能
 
-- Node **24.20.0**、Actual API **26.9.0**、Codex App Server **0.153.4**。
-- 所有依赖锁在 `package-lock.json`，服务器使用构建好的镜像。
-- 服务地址默认 `https://receipts.hx-sun.com`；数据默认位于 `/opt/receipts`。
+- 金额以整数百分之一单位计算，支持商品优惠、整单优惠、税费、小费和费用分摊。
+- 通过 Passkey、恢复码、CSRF 校验和短期敏感操作验证保护账户。
+- 支持 ChatGPT 订阅的 Codex 模式，以及兼容 OpenAI Responses / Chat Completions 的 API。
+- Actual 写入使用稳定提交 ID、重复候选检查、串行子进程和写入后回读核验。
+- 原图与识别预览在入账后进入清理队列。
 
-```sh
-npm ci
-npm run typecheck
-npm test
-npm run build
-npm run test:e2e
-node scripts/actual-local-check.mjs
-```
+## 快速启动
 
-浏览器测试使用 `/usr/bin/chromium`，可在 `playwright.config.ts` 中调整路径。测试服务器、虚拟 Passkey 和模型/账本样例均位于 `tests/`，生产构建只包含 `src/`。
-
-本地运行需要准备两个 Secret 文件：
+需要 Docker Engine、Docker Compose 插件和 OpenSSL。
 
 ```sh
+git clone https://github.com/qxzg/actual-receipts.git
+cd actual-receipts
+cp .env.example .env
 mkdir -p secrets
 openssl rand -hex 32 > secrets/master-key
 openssl rand -hex 32 > secrets/provider-token
 chmod 600 secrets/*
-APP_ORIGIN=https://receipts.example.com npm start
+docker compose up --build -d
+docker compose exec receipt-app node dist/server/admin.js bootstrap
 ```
 
-本地真实 Passkey 使用 HTTPS 反向代理；端到端测试使用浏览器认可的 localhost 安全上下文。
+打开 <http://localhost:3100>，输入最后一条命令生成的 15 分钟初始化令牌，并注册第一把 Passkey。恢复码只展示一次，适合立即存入密码管理器。
 
-## 部署
+随后在设置页完成：
 
-`deploy/compose.yml` 复用现有 Caddy/Actual 网络，两个新服务各限 512 MiB。应用与识别服务均以非 root 用户、只读根文件系统运行；数据、Secret 和临时目录分别挂载。容器未暴露宿主机端口。
+1. 填写自己的 Actual 服务器地址、密码和账本 Sync ID。
+2. 先选择独立测试账本并执行连接测试。
+3. 选择 ChatGPT 订阅或兼容 API，获取模型列表并执行图片能力测试。
+4. 上传测试小票，核对商品、优惠、税费范围和实付总额。
 
-本机有 Docker 时：
+容器访问宿主机上的 Actual 时，可填写 `http://host.docker.internal:5006`。公网 Actual 实例建议使用有效的 HTTPS 地址。
 
-```sh
-docker build --target app -f deploy/Dockerfile -t receipt-app:0.1.0 .
-docker build --target provider -f deploy/Dockerfile -t codex-provider:0.1.0 .
-docker save receipt-app:0.1.0 | gzip > receipt-app-0.1.0.tar.gz
-docker save codex-provider:0.1.0 | gzip > codex-provider-0.1.0.tar.gz
+## 公网部署
+
+Compose 默认将应用绑定在宿主机 `127.0.0.1:3100`。在反向代理中启用 HTTPS，并在 `.env` 中设置浏览器实际访问的来源：
+
+```dotenv
+APP_ORIGIN=https://receipts.example.com
+PUBLIC_PORT=3100
+TRUSTED_PROXY=172.20.0.2
 ```
 
-当前工作环境采用 `scripts/build-images.py` 在本机组装 Docker load 归档：官方 Node 镜像的 manifest、blob、diff ID 均经过 SHA-256 校验，生产依赖先在 Node 24 环境安装。归档摘要记录在 `artifacts/images/manifest.json`。
+`APP_ORIGIN` 必须与浏览器来源完全一致。localhost 支持 HTTP；其他主机名使用 HTTPS。`TRUSTED_PROXY` 填写直接连接应用的反向代理 IP，应用会据此处理代理地址和认证限流。
 
-将镜像、manifest 及 `deploy/` 中的配置复制到服务器 `/opt/receipts`，运行 `deploy/install.sh`。脚本校验归档、创建 Secret、启动容器、备份 Caddy 配置、校验新路由后热加载；错误时恢复原 Caddy 配置。
+数据分别保存在 `receipt-data` 与 `codex-data` 命名卷中。迁移或备份时应将两个卷与 `secrets/` 一起保存。
 
-Codex 容器通过只读挂载 `/etc/ssl/certs/ca-certificates.crt` 使用宿主机公共 CA 证书。部署主机需安装并更新 `ca-certificates`；Compose 会在证书文件缺失时阻止启动。证书校验始终开启。
-
-`TRUSTED_PROXY` 必须为现有 Caddy 在共享 Docker 网络中的实际 IP。Caddy 设置 `X-Forwarded-For` 为对端地址，应用仅信任该 Caddy 地址。通过 Cloudflare 代理访问时，认证限流按 Cloudflare 边缘对端聚合；单用户首版使用保守限制。Caddy 容器重新创建后请重新检查地址。
-
-## 首次使用
-
-1. 在服务器生成有效期 15 分钟的初始化令牌：
-   ```sh
-   cd /opt/receipts
-   docker compose exec receipt-app node dist/server/admin.js bootstrap
-   ```
-2. 打开工具网址，输入令牌并用自己的设备注册 Passkey。保存一次性展示的恢复码，然后在设置中添加备用 Passkey。
-3. 在设置中输入 Actual 服务器密码和独立测试账本的 Sync ID，测试并保存连接。
-4. 选择 ChatGPT 订阅时，通过设备码完成授权后，在下拉列表选择账号可用的图片模型，并阅读简短说明；API 模式填写 Base URL、Key 和协议，再获取模型列表并选择。保存后运行图片能力测试。
-5. 用测试小票核验商品、数量、分类、优惠、税费范围和实付总额。完成同步、断网恢复、资源测量和备份恢复验收后，再切换正式账本。
-
-图片可直接拍照或从相册选择。输入金额时以元/美元等主要单位填写，系统统一以整数百分之一单位计算。长小票按顺序上传，范围含糊的税费需要人工确认。
-
-## 账号恢复
-
-网页输入一个恢复码，绑定新 Passkey。恢复成功会撤销旧 Passkey、旧会话和旧恢复码。所有凭据遗失时：
+## 常用命令
 
 ```sh
-cd /opt/receipts
+docker compose ps
+docker compose logs -f
+docker compose up --build -d
+docker compose down
+```
+
+服务器管理员可以生成受限恢复令牌：
+
+```sh
 docker compose exec receipt-app node dist/server/admin.js recover
 ```
 
-管理员命令输出的一次性令牌进入相同受限恢复流程。
+## 开发
 
-## 备份、恢复和回滚
+项目固定使用 Node 24.20.x，版本记录在 `.node-version`。
 
 ```sh
-cd /opt/receipts
-./backup.sh
-./restore-check.sh backups/receipts-TIMESTAMP.tar.gz
+npm ci
+npm run check
+npm run test:e2e
+npm run test:actual
 ```
 
-备份包含 SQLite、图片、Actual 缓存及未发送消息、主密钥、内部认证密钥、Codex 凭据和 Compose 配置。备份目录权限为私有；再通过 SSH 下载到受控离线存储。恢复时停止两个新容器，保留当前目录副本，再解包备份、恢复 1000:1000 数据所有权、启动并执行 `admin check`。主密钥应与数据库一起保留。
+`npm run test:actual` 会创建临时 Actual 数据目录，验证父交易、拆分行、分类、稳定 ID 和余额，然后清理测试数据。浏览器测试默认使用 `/usr/bin/chromium`，可在 `playwright.config.ts` 中调整。
 
-回滚新增服务：停止 `receipts` Compose 项目，将 `backups/Caddyfile.before-receipts` 内容恢复到 `/opt/actual/Caddyfile` 后校验并 reload Caddy。保留业务数据与 Secret，以便后续恢复。
+本地开发服务器：
 
-## 文档
+```sh
+npm run dev
+npm run dev:web
+```
 
-- [架构、安全与提交协议](docs/ARCHITECTURE.md)
-- [验收记录](docs/ACCEPTANCE.md)
-- [部署清单](deploy/compose.yml)
+本地服务仍需 `secrets/master-key` 和 `secrets/provider-token`。Docker Compose 提供完整的 Codex 识别服务；前后端开发也可在设置页使用兼容 API。
+
+架构、安全边界和 Actual 提交协议见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。
+
+## License
+
+[MIT](LICENSE) © 2026 qxzg

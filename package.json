@@ -2,16 +2,19 @@
   "name": "receipt-ledger",
   "version": "0.1.0",
   "private": true,
+  "license": "MIT",
   "type": "module",
   "engines": {
-    "node": ">=24.0.0"
+    "node": ">=24.20.0 <24.21.0"
   },
   "scripts": {
     "dev": "tsx watch src/server/main.ts",
     "dev:web": "vite --host 127.0.0.1",
     "build": "tsc -p tsconfig.server.json && vite build",
+    "check": "npm run typecheck && npm test && npm run build",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "test:actual": "npm run build && node scripts/actual-local-check.mjs",
     "test:e2e": "playwright test",
     "start": "node dist/server/main.js",
     "provider": "node dist/provider/main.js",
@@ -34,7 +37,7 @@
   },
   "devDependencies": {
     "@playwright/test": "1.63.0",
-    "@types/node": "26.4.1",
+    "@types/node": "24.13.3",
     "@types/react": "19.2.18",
     "@types/react-dom": "19.2.7",
     "@vitejs/plugin-react": "6.1.1",

@@ -96,7 +96,7 @@ function ReceiptEditor({ id, catalog, busy, run, back, onNotice }: { id: string;
   </>;
 }
 function Settings({ run, secure, busy, register, login, onCodes, onNotice, reload }: { run: Run; secure: (fn: () => Promise<any>) => Promise<any>; busy: boolean; register: (n: string) => Promise<void>; login: () => Promise<void>; onCodes: (c: string[]) => void; onNotice: (s: string) => void; reload: () => Promise<void> }) {
-  const [a, setA] = useState<any>({ serverURL: 'https://budget.hx-sun.com', password: '', budgetPassword: '', syncId: '', currency: 'USD', testBudget: true });
+  const [a, setA] = useState<any>({ serverURL: '', password: '', budgetPassword: '', syncId: '', currency: 'USD', testBudget: true });
   const [m, setM] = useState<any>({ provider: 'codex', baseURL: 'https://api.openai.com/v1', apiKey: '', model: '', protocol: 'responses', structured: true });
   const [modelRefresh, setModelRefresh] = useState(0);
   const [keys, setKeys] = useState<any[]>([]), [sessions, setSessions] = useState<any[]>([]), [events, setEvents] = useState<any[]>([]), [keyName, setKeyName] = useState('备用 Passkey'), [device, setDevice] = useState<any>(null), [chatStatus, setChatStatus] = useState<any>(null);

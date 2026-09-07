@@ -1,15 +1,13 @@
 node_modules/
-backups/*.zip
 dist/
 data/
-.env
 secrets/
+.env
 artifacts/
+backups/
 test-results/
 playwright-report/
 *.log
-backups/*.tar.gz
-backups/*.sha256
 __pycache__/
 test1.jpg
 test2.jpg

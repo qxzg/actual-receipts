@@ -1,6 +1,6 @@
 # 小票账本实现说明
 
-应用为 Node 24、TypeScript、Fastify、React，数据保存在 SQLite。部署目标是 `bwh-us:/opt/receipts`，网站为 `https://receipts.hx-sun.com`。两个新容器各限 512 MiB，Caddy 复用 `actual_default` 网络。
+应用使用 Node 24、TypeScript、Fastify 和 React，数据保存在 SQLite。默认 Compose 将网页服务与 Codex 识别服务分成两个容器，各自使用独立持久化卷和 512 MiB 内存上限。网页服务通过使用者配置的 URL 连接 Actual。
 
 ## 身份验证
 
@@ -32,17 +32,17 @@
 
 识别为持久化任务，单并发执行，保存失败原因并保留旧草稿。重新识别有覆盖确认。模型输出经 Zod 严格检查，分类按实际账本校验，税费与疑点要求用户核对。
 
-API 模式支持 Chat Completions、Responses、JSON Schema/JSON 模式。模型从服务商 `/models` 或 Codex `model/list` 动态获取，以带中文说明的下拉列表选择；已明确为文本输入或已停用的订阅模型会被过滤。兼容服务商没有提供图片能力元数据时，界面要求图片测试确认。Codex 模式使用固定 0.153.4 的 App Server stdio 协议；每次识别启动临时进程和 ephemeral thread，关闭 shell、unified exec 和联网搜索，拒绝所有服务端工具/审批请求。仅内部认证 HTTP 路由暴露授权、状态和识别。Codex 使用只读挂载的宿主机公共 CA 根证书验证 HTTPS；Node 自带的信任根与 Rust 进程使用的系统证书存储分别配置。模型容器仅挂载独立 Codex 登录目录，不包含 Actual 凭据或业务数据目录。
+API 模式支持 Chat Completions、Responses、JSON Schema/JSON 模式。模型从服务商 `/models` 或 Codex `model/list` 动态获取，以带中文说明的下拉列表选择；已明确为文本输入或已停用的订阅模型会被过滤。兼容服务商缺少图片能力元数据时，界面要求图片测试确认。Codex 模式使用固定 0.153.4 的 App Server stdio 协议；每次识别启动临时进程和 ephemeral thread，关闭 shell、unified exec 和联网搜索，拒绝所有服务端工具与审批请求。内部认证 HTTP 路由只提供授权、状态和识别。Codex 镜像包含公共 CA 根证书，用于验证 HTTPS。模型容器仅挂载独立 Codex 登录目录，Actual 凭据和业务数据由网页服务管理。
 
 成功入账后，清理队列删除原图、预览和图片引用，保留结构化明细。清理失败有退避重试和单独状态。用户删除草稿也使用清理队列。模型商留存遵循其服务设置。
 
-## 已知运行条件
+## 运行条件
 
-首次真实 Passkey 注册、备用密钥、ChatGPT 设备码授权需要所有者亲自完成。模型实际账号权限和识别峰值内存需在授权后测量。图片质量、长小票重叠和混合税率始终在核对页由用户确认。退货、混合付款和编辑既有 Actual 交易超出首版范围。
+首次 Passkey 注册、备用密钥和 ChatGPT 设备码授权由所有者完成。模型权限与识别峰值内存取决于账号和部署硬件。图片质量、长小票重叠和混合税率由用户在核对页确认。首版功能范围覆盖新建单一付款账户的小票交易。
 
 ## 官方接口来源
 
 - [Actual 官方 API](https://actualbudget.org/docs/api/reference/)，并核验安装包 26.9.0 的实现与类型。
 - [SimpleWebAuthn 服务端](https://simplewebauthn.dev/docs/packages/server)，服务器 14.0.1、浏览器 14.0.0。
-- [Codex App Server](https://learn.chatgpt.com/docs/app-server)，协议按本机 Codex 0.153.4 生成类型核对。
+- [Codex App Server](https://learn.chatgpt.com/docs/app-server)，协议按 Codex 0.153.4 生成类型核对。
 - [Responses API](https://platform.openai.com/docs/api-reference/responses)，使用图片输入与 JSON Schema 输出。

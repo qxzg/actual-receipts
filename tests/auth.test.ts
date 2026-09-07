@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import sharp from 'sharp';
 import { createApp } from '../src/server/app';
-import { Store, now, hash, token } from '../src/server/db';
+import { now, hash, token } from '../src/server/db';
 let context: Awaited<ReturnType<typeof createApp>>, dir:string, cookie:string, csrf:string;
 const origin='https://receipts.example.test';
 async function request(method:any,url:string,payload?:any,headers:any={}){return context.app.inject({method,url,payload,headers:{cookie,origin,'x-csrf-token':csrf,...headers}})}
