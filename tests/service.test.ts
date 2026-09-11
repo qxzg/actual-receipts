@@ -1,3 +1,4 @@
+import { emptyProduct } from '../src/shared/product.js';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -12,7 +13,7 @@ beforeEach(() => {
   dir=mkdtempSync(join(tmpdir(),'receipt-test-')); store=new Store(dir,Buffer.alloc(32,1)); writes=[];
   actual={ connection:()=> 'connection', catalog:async()=>({accounts:[{id:'a',name:'Bank'}],categories:[{id:'c',name:'Food'}],currency:'USD'}), duplicates:async()=>[], write:async(t:any)=>{writes.push(t);return {id:t.id}}, verify:async(t:any)=>({found:writes.length>0,valid:writes.some(w=>w.id===t.id),id:t.id}) };
   svc=new ReceiptService(store,actual,{recognize:async()=>({...draft})} as any,Buffer.alloc(32,1));
-  draft={...emptyDraft('USD','a'),merchant:'Test store',date:'2026-09-06',total:101,items:[{id:'one',name:'Test item',quantity:'1',unitPrice:101,amount:101,discount:0,category:'c'}]};
+  draft={...emptyDraft('USD','a'),merchant:'Test store',date:'2026-09-06',total:101,items:[{id:'one',name:'Test item',product:emptyProduct('', 'count'),quantity:'1',unitPrice:101,amount:101,discount:0,category:'c'}]};
   receiptID=id(); store.run("INSERT INTO receipts(id,status,draft,created_at,updated_at,submission_id) VALUES(?,'draft',?,?,?,?)",receiptID,JSON.stringify(draft),now(),now(),id());
 });
 afterEach(()=>{store.db.close();rmSync(dir,{recursive:true,force:true});});
@@ -49,6 +50,33 @@ describe('submission and recovery',()=>{
   });
   it('parent/child verification detects rule-modified notes, category and amount',()=>{
     const t=buildTransaction(draft,allocate(draft),'sub','parent');expect(transactionMatches(t,t)).toBe(true); const changed=structuredClone(t);changed.subtransactions[0].category='wrong';expect(transactionMatches(changed,t)).toBe(false);expect(t.amount).toBe(-101);expect(t.subtransactions[0].notes).toContain('Test item');
+  });
+  it.each(['queued', 'uncertain'])('preserves v1 snapshots during %s recovery', async state => {
+    const r = svc.receipt(receiptID); await svc.submit(receiptID, 1, r.submission_id);
+    const submission = store.get('SELECT * FROM submissions');
+    const snapshot = JSON.parse(submission.snapshot); delete snapshot.notesFormatVersion; delete snapshot.draft.items[0].product;
+    store.run('UPDATE submissions SET snapshot=?,status=?', JSON.stringify(snapshot), state);
+    expect(svc.receipt(receiptID).notesFormatVersion).toBe(1);
+    const wanted = buildTransaction(snapshot.draft, JSON.parse(submission.allocation), submission.id, submission.transaction_id, 1);
+    if (state === 'uncertain') {
+      writes.push(wanted); actual.verify = async (t:any) => ({found:true, valid:transactionMatches(writes[0], t), id:t.id});
+      await svc.verify(receiptID); expect(writes).toHaveLength(1);
+    } else {
+      await (svc as any).runSubmission(); expect(writes[0]).toEqual(wanted);
+    }
+    expect(svc.receipt(receiptID).status).toBe('posted');
+  });
+  it('retries a missing legacy transaction with the same legacy notes', async () => {
+    const r = svc.receipt(receiptID); await svc.submit(receiptID, 1, r.submission_id);
+    const submission = store.get('SELECT * FROM submissions'); const snapshot = JSON.parse(submission.snapshot); delete snapshot.notesFormatVersion;
+    store.run("UPDATE submissions SET snapshot=?,status='uncertain'", JSON.stringify(snapshot));
+    await svc.retrySubmission(receiptID); await (svc as any).runSubmission();
+    expect(writes[0].subtransactions[0].notes).toContain('单价 1.01');
+  });
+  it('freezes v2 notes in the new submission snapshot', async () => {
+    const r=svc.receipt(receiptID); await svc.submit(receiptID,1,r.submission_id);
+    expect(JSON.parse(store.get('SELECT snapshot FROM submissions').snapshot).notesFormatVersion).toBe(2);
+    await (svc as any).runSubmission(); expect(writes[0].subtransactions[0].notes).toBe('Test item');
   });
   it('encrypts secrets and authenticates ciphertext',()=>{
     store.setSetting('key',{secret:'PRIVATE-VALUE'});const row=store.get('SELECT value FROM settings');expect(row.value).not.toContain('PRIVATE-VALUE');expect(store.setting('key')).toEqual({secret:'PRIVATE-VALUE'});expect(()=>store.decrypt(row.value.replace(/^./,row.value[0]==='A'?'B':'A'))).toThrow();

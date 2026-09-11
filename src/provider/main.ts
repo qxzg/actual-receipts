@@ -2,6 +2,7 @@ import Fastify from 'fastify';
 import { readFileSync, mkdirSync } from 'node:fs';
 import { timingSafeEqual } from 'node:crypto';
 import { z } from 'zod';
+import { enrichmentInputSchema, enrichmentOutputSchema, enrichmentPrompt } from '../shared/enrichment.js';
 import { CodexRPC } from './rpc.js';
 const token = readFileSync(process.env.PROVIDER_TOKEN_FILE || '/run/secrets/provider-token', 'utf8').trim();
 if (token.length < 32) throw new Error('Internal token is too short');
@@ -36,6 +37,27 @@ app.post('/recognize', async (req, reply) => {
   const input = z.object({ images: z.array(z.string().max(4_200_000).regex(/^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/=]+$/)).min(1).max(8), prompt: z.string().max(200000), model: z.string().min(1).max(150), schema: z.record(z.string(), z.unknown()) }).parse(req.body);
   busy = true; const rpc = new CodexRPC();
   try { return await rpc.recognize(input); } finally { rpc.close(); busy = false; }
+});
+app.post('/enrich', async (req, reply) => {
+  if (busy) return reply.code(409).send({ error: '商品查询处理中，请稍后重试' });
+  const input = enrichmentInputSchema.parse(req.body);
+  busy = true; const rpc = new CodexRPC(true);
+  try {
+    await rpc.ready;
+    const account = await rpc.call('account/read', { refreshToken: false });
+    if (!account.account) return reply.code(401).send({ error: '请先完成 ChatGPT 授权' });
+    let model = input.model;
+    if (!model) {
+      const data: any[] = []; let cursor: string | undefined;
+      do {
+        const page = await rpc.call('model/list', { includeHidden: false, ...(cursor ? { cursor } : {}) });
+        data.push(...page.data); cursor = page.nextCursor || undefined;
+      } while (cursor && data.length < 500 && !data.some(m => m.isDefault));
+      model = data.find(m => m.isDefault)?.model;
+      if (!model) throw new Error('Codex 默认模型暂时不可用');
+    }
+    return enrichmentOutputSchema.parse(await rpc.recognize({ images: [], model, prompt: enrichmentPrompt(input), schema: z.toJSONSchema(enrichmentOutputSchema, { target: 'draft-7' }) }));
+  } finally { rpc.close(); busy = false; }
 });
 const stop = async () => { auth?.close(); await app.close(); process.exit(0); };
 process.on('SIGTERM', stop); process.on('SIGINT', stop);

@@ -13,7 +13,9 @@ export class ReceiptService {
   receipt(receiptID: string): Receipt {
     const row = this.store.get('SELECT * FROM receipts WHERE id=?', receiptID); if (!row || row.status === 'deleting') fail('小票记录不存在', 404);
     const draft = draftSchema.parse(JSON.parse(row.draft));
-    return { ...row, draft, images: this.store.all('SELECT id,position FROM images WHERE receipt_id=? ORDER BY position', receiptID), allocation: allocate(draft) };
+    const submission = this.store.get('SELECT snapshot FROM submissions WHERE receipt_id=?', receiptID);
+    const notesFormatVersion = submission ? JSON.parse(submission.snapshot).notesFormatVersion ?? 1 : 2;
+    return { ...row, draft, notesFormatVersion, images: this.store.all('SELECT id,position FROM images WHERE receipt_id=? ORDER BY position', receiptID), allocation: allocate(draft) };
   }
   save(receiptID: string, version: number, draft: Draft) {
     const row = this.receipt(receiptID);
@@ -64,7 +66,7 @@ export class ReceiptService {
       if (this.actual.connection() !== connection) fail('账本连接已变化，请重新检查', 409);
       this.store.tx(() => {
         if (!this.store.run("UPDATE receipts SET status='submitting',updated_at=?,error=NULL WHERE id=? AND version=? AND status IN ('draft','failed')", time, receiptID, version).changes) fail('草稿已被另一页面修改', 409);
-        this.store.run("INSERT INTO submissions VALUES(?,?,?,'queued',?,?,?,?,NULL,?,?)", submissionID, receiptID, version, JSON.stringify({ draft: r.draft, duplicateIds: candidates.map(c => c.id) }), JSON.stringify(allocation), id(), this.actual.connection(), time, time);
+        this.store.run("INSERT INTO submissions VALUES(?,?,?,'queued',?,?,?,?,NULL,?,?)", submissionID, receiptID, version, JSON.stringify({ notesFormatVersion: 2, draft: r.draft, duplicateIds: candidates.map(c => c.id) }), JSON.stringify(allocation), id(), this.actual.connection(), time, time);
       });
       return this.receipt(receiptID);
     });
@@ -84,7 +86,7 @@ export class ReceiptService {
       const s = this.store.get('SELECT * FROM submissions WHERE receipt_id=?', receiptID); if (!s) fail('尚无提交记录');
       if (s.status === 'synced') return this.receipt(receiptID);
       if (s.connection !== this.actual.connection()) fail('请恢复提交时使用的 Actual 账本连接', 409);
-      const result = await this.actual.verify(buildTransaction(JSON.parse(s.snapshot).draft, JSON.parse(s.allocation), s.id, s.transaction_id));
+      const result = await this.actual.verify(buildTransaction(JSON.parse(s.snapshot).draft, JSON.parse(s.allocation), s.id, s.transaction_id, JSON.parse(s.snapshot).notesFormatVersion ?? 1));
       if (result.valid && result.id) this.complete(s, result.id);
       else this.uncertain(s, result.found ? '已找到关联交易，金额或明细与提交记录有差异，请在 Actual 中核对' : '远端暂未找到关联交易，原提交标识已保留；核对 Actual 后可重试此提交');
       return this.receipt(receiptID);
@@ -96,7 +98,7 @@ export class ReceiptService {
       if (s.connection !== this.actual.connection()) fail('请恢复原账本连接', 409);
       // Flush surviving local messages, then download a fresh verification copy before any retry.
       await this.actual.catalog();
-      const result = await this.actual.verify(buildTransaction(JSON.parse(s.snapshot).draft, JSON.parse(s.allocation), s.id, s.transaction_id));
+      const result = await this.actual.verify(buildTransaction(JSON.parse(s.snapshot).draft, JSON.parse(s.allocation), s.id, s.transaction_id, JSON.parse(s.snapshot).notesFormatVersion ?? 1));
       if (result.valid && result.id) { this.complete(s, result.id); return this.receipt(receiptID); }
       if (result.found) fail('关联交易存在，请在 Actual 中人工核对', 409);
       const candidates = await this.actual.duplicates(JSON.parse(s.snapshot).draft);
@@ -138,7 +140,7 @@ export class ReceiptService {
       const candidates = await this.actual.duplicates(draft);
       if (candidates.some(c => !duplicateIds.includes(c.id))) { this.uncertain(s, '出现新的同金额交易，请先核验重复候选'); return; }
       this.store.run("UPDATE submissions SET status='writing',updated_at=? WHERE id=?", now(), s.id);
-      const transaction = buildTransaction(draft, JSON.parse(s.allocation), s.id, s.transaction_id);
+      const transaction = buildTransaction(draft, JSON.parse(s.allocation), s.id, s.transaction_id, JSON.parse(s.snapshot).notesFormatVersion ?? 1);
       await this.actual.write(transaction);
       const result = await this.actual.verify(transaction);
       if (!result.valid || !result.id) throw new Error('远端回读结果待核验');

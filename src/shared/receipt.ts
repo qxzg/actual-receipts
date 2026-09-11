@@ -1,8 +1,10 @@
 import { z } from 'zod';
+import { productSchema, needsProductReview } from './product.js';
 export const money = z.number().int().min(0).max(1_000_000_000);
 export const currencies = ['USD', 'CNY', 'EUR', 'GBP', 'CAD', 'AUD', 'HKD', 'SGD'] as const;
 export const itemSchema = z.object({
   id: z.string().min(1).max(80), name: z.string().max(300),
+  product: productSchema.nullable().optional(),
   quantity: z.string().regex(/^\d{1,8}(\.\d{1,6})?$/), unitPrice: money.nullable(),
   amount: money, discount: money, category: z.string().max(100).nullable(),
 });
@@ -32,7 +34,7 @@ export type Receipt = {
   id: string; version: number; status: string; draft: Draft;
   images: { id: string; position: number }[]; created_at: number; updated_at: number;
   error: string | null; cleanup: string; transaction_id: string | null;
-  submission_id: string; allocation: Allocation;
+  submission_id: string; allocation: Allocation; notesFormatVersion?: number;
 };
 export type Allocation = { lines: { id: string; base: number; adjustments: { id: string; label: string; amount: number }[]; final: number }[]; sum: number; difference: number; errors: string[] };
 export function validDate(date: string) {
@@ -85,6 +87,12 @@ export function validateForSubmit(d: Draft, accounts: Account[], categories: Cat
   if (!d.items.length || d.total <= 0) errors.push('请填写商品与实付总额');
   d.items.forEach(i => {
     if (!i.name.trim() || !Number.isFinite(Number(i.quantity)) || Number(i.quantity) <= 0) errors.push('请填写商品名称和有效数量');
+    const p = i.product;
+    if (!p || p.quantityKind === 'unknown') errors.push(`请确认「${i.name}」的数量类型`);
+    if (p?.quantityKind === 'count' && !Number.isInteger(Number(i.quantity))) errors.push(`请确认「${i.name}」的购买件数`);
+    if (p && ['weight', 'volume'].includes(p.quantityKind) && (!p.unit || !(p.quantityKind === 'weight' ? ['oz','lb','g','kg'] : ['floz','ml','l']).includes(p.unit))) errors.push(`请确认「${i.name}」的计量单位`);
+    if (p?.size && Number(p.size.value) <= 0) errors.push(`请确认「${i.name}」的单件规格`);
+    if (needsProductReview(p)) errors.push(`请核对「${i.name}」的商品识别结果`);
     if (!categories.some(c => c.id === i.category)) errors.push(`请为「${i.name}」选择有效分类`);
   });
   if (a.difference !== 0) errors.push(`明细与实付相差 ${a.difference} 个最小货币单位`);

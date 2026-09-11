@@ -1,3 +1,4 @@
+import { emptyProduct } from '../src/shared/product';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { emptyDraft, draftSchema } from '../src/shared/receipt';
 import { apiRecognize, Recognizer, normalizeModels, listAPIModels } from '../src/server/models';
@@ -41,4 +42,29 @@ describe('model dropdown catalog', () => {
     expect(JSON.stringify(result)).not.toContain('secret-key');
   });
   it('rejects malformed catalog responses',()=>{expect(()=>normalizeModels({data:[{id:5}]},'api')).toThrow('格式无效')});
+});
+
+
+describe('recognition to enrichment integration', () => {
+  it.each(['api', 'codex'] as const)('routes %s extraction to Codex product lookup with minimal input', async provider => {
+    const extracted = { ...emptyDraft('USD'), merchant:'Amazon', date:'2026-09-11', total:999, items:[{
+      id:'tool', name:'IGAN 330', quantity:'1', unitPrice:999, amount:999, discount:0, category:'tools',
+      product:{...emptyProduct('IGAN 330', 'count'),productCode:'IGAN-330',lookupStatus:'pending'},
+    }] };
+    const f = vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, init) => {
+      if (String(url).endsWith('/enrich')) {
+        const input = JSON.parse(init!.body as string);
+        expect(input.model).toBe(provider === 'codex' ? 'vision' : null);
+        expect(input.items[0]).not.toHaveProperty('unitPrice');
+        expect(input).not.toHaveProperty('images');
+        return new Response(JSON.stringify({items:[{id:'tool',name:'IGAN-330 Flush Cutters',size:null,packCount:null,status:'matched',reason:'',sources:[{title:'IGAN product',url:'https://example.com/product'}]}]}));
+      }
+      return new Response(JSON.stringify(provider === 'codex' ? extracted : { status:'completed',output:[{content:[{type:'output_text',text:JSON.stringify(extracted)}]}] }));
+    });
+    const recognizer = new Recognizer({setting:()=>({...settings,provider})} as any, {providerUrl:'http://provider.test',providerToken:'internal-token'} as any);
+    const result = await recognizer.recognize([], [{id:'tools',name:'Tools'}], 'USD');
+    expect(f).toHaveBeenCalledTimes(2);
+    expect(result.items[0]).toMatchObject({name:'IGAN-330 Flush Cutters',quantity:'1',amount:999,unitPrice:999,category:'tools'});
+    expect(result.items[0].product?.lookupStatus).toBe('matched');
+  });
 });

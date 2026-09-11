@@ -1,3 +1,4 @@
+import { formatItemNotes, formatLegacyNotes } from '../shared/product.js';
 import { fork } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
@@ -13,13 +14,13 @@ export class Serial {
   run<T>(fn: () => Promise<T>): Promise<T> { const next = this.tail.then(fn); this.tail = next.catch(() => {}); return next; }
 }
 export const markerFor = (submissionID: string) => `receipt:${submissionID}`;
-export function buildTransaction(d: Draft, allocation: Allocation, submissionID: string, parentID: string) {
+export function buildTransaction(d: Draft, allocation: Allocation, submissionID: string, parentID: string, notesFormatVersion = 2) {
   const marker = markerFor(submissionID);
   return { id: parentID, account: d.account, date: d.date, amount: -d.total, payee_name: d.merchant,
     imported_id: marker, notes: `[${marker}] ${d.merchant}`, is_parent: true, cleared: false,
     subtransactions: d.items.map((i, n) => ({ account: d.account, date: d.date, parent_id: parentID, is_child: true, is_parent: false,
       amount: -allocation.lines[n].final, category: i.category!, cleared: false,
-      notes: `${i.name} × ${i.quantity}；单价 ${i.unitPrice === null ? '待确认' : (i.unitPrice / 100).toFixed(2)}；原价 ${(i.amount / 100).toFixed(2)}；商品优惠 ${(i.discount / 100).toFixed(2)}${allocation.lines[n].adjustments.map(a => `；${a.label} ${(a.amount / 100).toFixed(2)}`).join('')} ${d.currency}`,
+      notes: notesFormatVersion === 1 ? formatLegacyNotes(i, allocation.lines[n], d.currency) : formatItemNotes(i, d.currency),
     })) };
 }
 export function transactionMatches(found: any, wanted: ReturnType<typeof buildTransaction>) {

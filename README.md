@@ -93,3 +93,11 @@ npm run dev:web
 ## License
 
 [MIT](LICENSE) © 2026 qxzg
+
+## 商品名称与 Actual 备注
+
+识别会整理商品品牌、简短型号和核心性质；遇到缩写或商品代码时，通过 ChatGPT 授权按需联网查询。API 识别也复用设置页的 ChatGPT 授权。查询来源与票面原文在「规格与识别依据」中查看，匹配疑点可编辑后确认。
+
+新商品子交易的备注采用简洁格式，例如 `IGAN-330 Flush Cutters`、`Diet Coke 7.5flozx10x4` 或 `Foster Farms Free Range Chicken Thighs 3.2lb $1.40/lb`。包装内件数与购买包数分别填写；税费、优惠和分摊金额仍在核对页查看。备注预览随编辑即时更新。
+
+升级后保留父交易标识和已入账历史，已有排队或待核验提交继续使用原备注格式。旧草稿在新提交前需要确认数量类型。
