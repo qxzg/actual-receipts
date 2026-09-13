@@ -6,11 +6,11 @@ import { CodexRPC } from '../src/provider/rpc';
 
 vi.mock('node:child_process', () => ({ spawn: vi.fn() }));
 let child: EventEmitter & { stdin: PassThrough; stdout: PassThrough; stderr: PassThrough; kill: ReturnType<typeof vi.fn> };
-let calls: any[], output: any, actions: any[];
+let calls: any[], output: any, actions: any[], events: any[];
 const url = 'https://www.coca-cola.com/us/en/brands/diet-coke';
 const send = (value: unknown) => child.stdout.write(JSON.stringify(value) + '\n');
 beforeEach(() => {
-  calls = []; actions = [];
+  calls = []; actions = []; events = [];
   output = { items: [{ id: 'coke', name: 'Diet Coke', status: 'matched', sources: [{ title: 'Product', url }] }] };
   child = Object.assign(new EventEmitter(), { stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough(), kill: vi.fn() });
   vi.mocked(spawn).mockReturnValue(child as any);
@@ -21,6 +21,7 @@ beforeEach(() => {
       if (message.method === 'thread/start') queueMicrotask(() => send({ id: message.id, result: { thread: { id: 'thread' } } }));
       if (message.method === 'turn/start') queueMicrotask(() => {
         send({ id: message.id, result: {} });
+        for (const event of events) send(event);
         for (const action of actions) send({ method: 'item/completed', params: { threadId: 'thread', item: { type: 'webSearch', action } } });
         send({ method: 'item/completed', params: { threadId: 'thread', item: { type: 'agentMessage', text: JSON.stringify(output) } } });
         send({ method: 'turn/completed', params: { threadId: 'thread', turn: { status: 'completed' } } });
@@ -61,4 +62,18 @@ describe('isolated Codex search', () => {
       expect(calls.find(c => c.method === 'thread/start').params.config.web_search).toBe('disabled');
     } finally { rpc.close(); }
   });
+});
+
+
+it('reports lifecycle states scoped to its thread and keeps model text private', async () => {
+  events = [
+    {method:'item/started',params:{threadId:'other',item:{type:'webSearch'}}},
+    {method:'item/started',params:{threadId:'thread',item:{type:'reasoning',content:['private reasoning']}}},
+    {method:'item/reasoning/summaryTextDelta',params:{threadId:'thread',delta:'private summary'}},
+    {method:'item/started',params:{threadId:'thread',item:{type:'webSearch'}}},
+    {method:'item/agentMessage/delta',params:{threadId:'thread',delta:'private result'}},
+  ];
+  const report = vi.fn(), rpc = new CodexRPC();
+  try { await rpc.recognize(input, report); expect(report.mock.calls).toEqual([['thinking'],['thinking'],['searching'],['generating']]); }
+  finally { rpc.close(); }
 });

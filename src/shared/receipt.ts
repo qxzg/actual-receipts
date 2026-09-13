@@ -31,6 +31,7 @@ export const emptyDraft = (currency = 'USD', account = ''): Draft => ({
   account, total: 0, items: [], adjustments: [], warnings: [], warningsReviewed: false,
 });
 export type Receipt = {
+  recognition?: import('./progress.js').RecognitionProgress | null;
   id: string; version: number; status: string; draft: Draft;
   images: { id: string; position: number }[]; created_at: number; updated_at: number;
   error: string | null; cleanup: string; transaction_id: string | null;

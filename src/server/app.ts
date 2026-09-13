@@ -36,6 +36,10 @@ export async function createApp(config: Config, overrides: { store?: Store; actu
   });
   app.get('/healthz', async () => { store.get('SELECT 1'); return { ok: true }; });
   app.get('/api/catalog', async () => actual.catalog());
+  app.get('/api/recognition-model', async () => {
+    const settings = store.setting<ModelSettings>('model');
+    return { model: settings ? { provider: settings.provider, model: settings.model } : null };
+  });
   app.get('/api/settings', async () => {
     const a = store.setting<ActualSettings>('actual'), m = store.setting<ModelSettings>('model');
     return { actual: a ? { ...a, password: '', budgetPassword: '', hasPassword: !!a.password, hasBudgetPassword: !!a.budgetPassword } : null,

@@ -1,7 +1,7 @@
 import { emptyProduct } from '../src/shared/product';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { emptyDraft, draftSchema } from '../src/shared/receipt';
-import { apiRecognize, Recognizer, normalizeModels, listAPIModels } from '../src/server/models';
+import { apiRecognize, Recognizer, normalizeModels, listAPIModels, providerWithProgress } from '../src/server/models';
 const settings={provider:'api' as const,baseURL:'https://models.example.test/v1',apiKey:'private-key',model:'vision',protocol:'responses' as const,structured:true};
 afterEach(()=>vi.restoreAllMocks());
 describe('model adapters',()=>{
@@ -67,4 +67,36 @@ describe('recognition to enrichment integration', () => {
     expect(result.items[0]).toMatchObject({name:'IGAN-330 Flush Cutters',quantity:'1',amount:999,unitPrice:999,category:'tools'});
     expect(result.items[0].product?.lookupStatus).toBe('matched');
   });
+});
+
+it('polls scoped provider states, tolerates status failures, and stops after the result', async () => {
+  vi.useFakeTimers();
+  let finish!: (r: Response) => void;
+  let operationID = '', polls = 0;
+  const report = vi.fn();
+  vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, init) => {
+    const body = JSON.parse(init!.body as string);
+    if (String(url).endsWith('/recognize')) { operationID = body.progressId; return new Promise<Response>(resolve => { finish = resolve; }); }
+    expect(body.id).toBe(operationID); polls++;
+    if (polls === 1) throw new Error('temporary progress outage');
+    return new Response(JSON.stringify({progress:{stage:'thinking',model:'chosen',rawText:'private'}}));
+  });
+  try {
+    const running = providerWithProgress({providerUrl:'http://provider.test',providerToken:'internal'} as any, '/recognize', {model:'chosen'}, report);
+    await vi.advanceTimersByTimeAsync(1600);
+    expect(operationID).toMatch(/^[0-9a-f-]{36}$/);
+    expect(report.mock.calls).toEqual([['thinking',{provider:'codex',model:'chosen'}]]);
+    finish(new Response('{"ok":true}'));
+    expect(await running).toEqual({ok:true});
+    await vi.advanceTimersByTimeAsync(2400);
+    expect(polls).toBe(2);
+  } finally { vi.useRealTimers(); }
+});
+
+it('reports API request and validation phases for non-streaming providers', async () => {
+  vi.spyOn(globalThis,'fetch').mockResolvedValue(new Response(JSON.stringify({status:'completed',output:[{content:[{type:'output_text',text:JSON.stringify(emptyDraft())}]}]})));
+  const report = vi.fn(), recognizer = new Recognizer({setting:()=>settings} as any, {} as any);
+  await recognizer.recognize([], [], 'USD', report);
+  expect(report.mock.calls.map(c=>c[0])).toEqual(['preparing','waiting','validating','validating']);
+  expect(report.mock.calls.every(c=>c[1].model==='vision' && c[1].provider==='api')).toBe(true);
 });

@@ -115,3 +115,22 @@ describe('recognition job recovery', () => {
     expect(svc.receipt(receiptID).status).toBe('draft');
   });
 });
+
+
+it.each([false, true])('publishes job progress and clears it on completion or failure (%s)', async fails => {
+  store.setSetting('model', {provider:'codex', model:'chosen'});
+  store.run('INSERT INTO images VALUES(?,?,?,?,?)', id(), receiptID, 0, '/unused', '/unused');
+  svc.recognizer = {recognize: async (_paths: string[], _categories: unknown, _currency: string, report: any) => {
+    report('thinking', {provider:'codex',model:'chosen'});
+    const r = svc.receipt(receiptID);
+    expect(r.status).toBe('recognizing');
+    expect(r.recognition).toMatchObject({stage:'thinking',model:'chosen',provider:'codex'});
+    expect(r.recognition!.startedAt).toBeGreaterThan(0);
+    if (fails) throw new Error('recognition failed');
+    return draft;
+  }} as any;
+  svc.enqueueRecognition(receiptID, 1, true);
+  await (svc as any).runRecognition();
+  expect(svc.receipt(receiptID).recognition).toBeNull();
+  expect(svc.receipt(receiptID).status).toBe(fails ? 'failed' : 'draft');
+});

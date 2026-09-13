@@ -4,7 +4,9 @@ import { ActualBridge, Serial, buildTransaction, type Candidate } from './actual
 import { Recognizer } from './models.js';
 import { draftSchema, allocate, validateForSubmit, type Draft, type Receipt } from '../shared/receipt.js';
 import { cleanupImages } from './images.js';
+import type { RecognitionProgress } from '../shared/progress.js';
 export class ReceiptService {
+  private progress = new Map<string, RecognitionProgress>();
   private submissionQueue = new Serial();
   private recognizing = false;
   private cleaning = false;
@@ -15,7 +17,7 @@ export class ReceiptService {
     const draft = draftSchema.parse(JSON.parse(row.draft));
     const submission = this.store.get('SELECT snapshot FROM submissions WHERE receipt_id=?', receiptID);
     const notesFormatVersion = submission ? JSON.parse(submission.snapshot).notesFormatVersion ?? 1 : 2;
-    return { ...row, draft, notesFormatVersion, images: this.store.all('SELECT id,position FROM images WHERE receipt_id=? ORDER BY position', receiptID), allocation: allocate(draft) };
+    return { ...row, draft, notesFormatVersion, recognition: this.progress.get(receiptID) || null, images: this.store.all('SELECT id,position FROM images WHERE receipt_id=? ORDER BY position', receiptID), allocation: allocate(draft) };
   }
   save(receiptID: string, version: number, draft: Draft) {
     const row = this.receipt(receiptID);
@@ -124,13 +126,17 @@ export class ReceiptService {
   }
   private async runRecognition() {
     const job = this.store.get("SELECT * FROM jobs WHERE status='queued' ORDER BY created_at LIMIT 1"); if (!job) return;
+    const startedAt = now();
     try {
       this.store.tx(() => { this.store.run("UPDATE jobs SET status='running' WHERE id=?", job.id); this.store.run("UPDATE receipts SET status='recognizing' WHERE id=?", job.receipt_id); });
       const r = this.receipt(job.receipt_id), catalog = await this.actual.catalog();
       const paths = this.store.all('SELECT thumbnail FROM images WHERE receipt_id=? ORDER BY position', r.id).map(i => i.thumbnail);
-      const draft = await this.recognizer.recognize(paths, catalog.categories, catalog.currency); draft.account = r.draft.account;
+      const draft = await this.recognizer.recognize(paths, catalog.categories, catalog.currency, (stage, model) => {
+        this.progress.set(r.id, { ...model, stage, startedAt });
+      }); draft.account = r.draft.account;
       this.store.tx(() => { this.store.run("UPDATE receipts SET draft=?,status='draft',version=version+1,error=NULL,updated_at=? WHERE id=? AND version=?", JSON.stringify(draft), now(), r.id, job.version); this.store.run("UPDATE jobs SET status='done' WHERE id=?", job.id); });
     } catch (e) { const message = safeError(e); this.store.tx(() => { this.store.run("UPDATE receipts SET status='failed',error=?,updated_at=? WHERE id=?", message, now(), job.receipt_id); this.store.run("UPDATE jobs SET status='failed',error=? WHERE id=?", message, job.id); }); }
+    finally { this.progress.delete(job.receipt_id); }
   }
   private async runSubmission() {
     const s = this.store.get("SELECT * FROM submissions WHERE status='queued' ORDER BY created_at LIMIT 1"); if (!s) return;

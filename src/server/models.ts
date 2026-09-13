@@ -1,4 +1,6 @@
 import { productSchema } from '../shared/product.js';
+import { randomUUID } from 'node:crypto';
+import { recognitionStages, type ReportProgress } from '../shared/progress.js';
 import { enrichProducts } from './enrichment.js';
 import { readFile } from 'node:fs/promises';
 import { z } from 'zod';
@@ -28,9 +30,25 @@ async function readJson(response: Response, max = 2_000_000) {
   try { while (true) { const { done, value } = await reader.read(); if (done) break; length += value.length; if (length > max) fail('模型输出过大', 502); chunks.push(value); } } finally { await reader.cancel(); }
   return JSON.parse(Buffer.concat(chunks).toString());
 }
-export async function providerCall(config: Config, path: '/status' | '/login' | '/logout' | '/recognize' | '/models' | '/enrich', data?: unknown) {
-  const response = await fetch(new URL(path, config.providerUrl), { method: data === undefined ? 'GET' : 'POST', headers: { authorization: `Bearer ${config.providerToken}`, 'content-type': 'application/json' }, body: data === undefined ? undefined : JSON.stringify(data), signal: AbortSignal.timeout((path === '/recognize' || path === '/enrich') ? 240_000 : 30_000), redirect: 'error' });
+export async function providerCall(config: Config, path: '/status' | '/login' | '/logout' | '/recognize' | '/models' | '/enrich' | '/progress', data?: unknown, signal?: AbortSignal) {
+  const response = await fetch(new URL(path, config.providerUrl), { method: data === undefined ? 'GET' : 'POST', headers: { authorization: `Bearer ${config.providerToken}`, 'content-type': 'application/json' }, body: data === undefined ? undefined : JSON.stringify(data), signal: signal || AbortSignal.timeout((path === '/recognize' || path === '/enrich') ? 240_000 : path === '/progress' ? 3000 : 30_000), redirect: 'error' });
   return readJson(response);
+}
+export async function providerWithProgress(config: Config, path: '/recognize' | '/enrich', data: object, report?: ReportProgress) {
+  if (!report) return providerCall(config, path, data);
+  const progressId = randomUUID(), controller = new AbortController();
+  let finished = false, polling = false;
+  const timer = setInterval(() => {
+    if (polling || finished) return;
+    polling = true;
+    void providerCall(config, '/progress', { id: progressId }, AbortSignal.any([controller.signal, AbortSignal.timeout(3000)]))
+      .then(result => {
+        const parsed = z.object({ progress: z.object({ stage: z.enum(recognitionStages), model: z.string().min(1).max(150) }).nullable() }).safeParse(result);
+        if (!finished && parsed.success && parsed.data.progress) report(parsed.data.progress.stage, { provider: 'codex', model: parsed.data.progress.model });
+      }).catch(() => {}).finally(() => { polling = false; });
+  }, 800);
+  try { return await providerCall(config, path, { ...data, progressId }); }
+  finally { finished = true; clearInterval(timer); controller.abort(); }
 }
 export async function apiRecognize(settings: ModelSettings, images: string[], prompt: string, schema: any = receiptOutputSchema) {
   const base = new URL(settings.baseURL);
@@ -48,13 +66,17 @@ export async function apiRecognize(settings: ModelSettings, images: string[], pr
 }
 export class Recognizer {
   constructor(private store: Store, private config: Config) {}
-  recognize(paths: string[], categories: Category[], currency: string): Promise<Draft> { return withRecognition(() => this.recognizeInner(paths, categories, currency)); }
-  private async recognizeInner(paths: string[], categories: Category[], currency: string): Promise<Draft> {
+  recognize(paths: string[], categories: Category[], currency: string, report?: ReportProgress): Promise<Draft> { return withRecognition(() => this.recognizeInner(paths, categories, currency, report)); }
+  private async recognizeInner(paths: string[], categories: Category[], currency: string, report?: ReportProgress): Promise<Draft> {
     const settings = this.store.setting<ModelSettings>('model'); if (!settings) fail('请先设置识别来源', 422);
+    const model = { provider: settings.provider, model: settings.model };
+    report?.('preparing', model);
     const images: string[] = [];
     for (const path of paths) images.push(`data:image/jpeg;base64,${(await readFile(path)).toString('base64')}`);
     const prompt = receiptPrompt(categories, currency);
-    const result = settings.provider === 'codex' ? await providerCall(this.config, '/recognize', { images, prompt, model: settings.model, schema: receiptOutputSchema }) : await apiRecognize(settings, images, prompt);
+    report?.('waiting', model);
+    const result = settings.provider === 'codex' ? await providerWithProgress(this.config, '/recognize', { images, prompt, model: settings.model, schema: receiptOutputSchema }, report) : await apiRecognize(settings, images, prompt);
+    report?.('validating', model);
     const parsed = draftSchema.safeParse(result); if (!parsed.success) fail('识别结果缺少必需字段或金额格式无效，请重试并核对原图', 502);
     const draft = parsed.data;
     draft.warningsReviewed = false; draft.conversionConfirmed = false; draft.originalCurrency = draft.currency;
@@ -68,7 +90,11 @@ export class Recognizer {
         if (!['clear', 'pending'].includes(i.product.lookupStatus)) i.product.lookupStatus = 'pending';
       }
     });
-    await enrichProducts(draft, settings.provider === 'codex' ? settings.model : null, input => providerCall(this.config, '/enrich', input));
+    await enrichProducts(draft, settings.provider === 'codex' ? settings.model : null, input => {
+      report?.('enriching', { provider: 'codex', model: settings.provider === 'codex' ? settings.model : 'ChatGPT 默认模型' });
+      return providerWithProgress(this.config, '/enrich', input, report);
+    });
+    report?.('validating', model);
     return draftSchema.parse(draft);
   }
 }

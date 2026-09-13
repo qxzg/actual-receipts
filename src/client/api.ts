@@ -1,9 +1,9 @@
 let csrf = '';
 export const setCSRF = (value: string) => { csrf = value; };
 export class APIError extends Error { constructor(public status: number, message: string) { super(message); } }
-export async function api<T = any>(path: string, method = 'GET', body?: unknown): Promise<T> {
+export async function api<T = any>(path: string, method = 'GET', body?: unknown, signal?: AbortSignal): Promise<T> {
   const form = body instanceof FormData;
-  const response = await fetch('/api' + path, { method, credentials: 'same-origin', headers: { ...(method !== 'GET' ? { 'x-csrf-token': csrf } : {}), ...(!form && body !== undefined ? { 'content-type': 'application/json' } : {}) }, body: body === undefined ? undefined : form ? body : JSON.stringify(body) });
+  const response = await fetch('/api' + path, { method, signal, credentials: 'same-origin', headers: { ...(method !== 'GET' ? { 'x-csrf-token': csrf } : {}), ...(!form && body !== undefined ? { 'content-type': 'application/json' } : {}) }, body: body === undefined ? undefined : form ? body : JSON.stringify(body) });
   let data: any;
   try { data = await response.json(); }
   catch {

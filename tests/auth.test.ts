@@ -13,7 +13,7 @@ afterEach(async()=>{await context.app.close();context.store.db.close();rmSync(di
 function becomeOwner(recent=true){const t=token();cookie='__Host-receipt='+t;csrf=token();context.store.run("INSERT INTO sessions VALUES(?,?,'owner',?,?,?,'test')",hash(t),csrf,now()+600000,recent?now():now()-600000,now());}
 describe('auth boundaries',()=>{
   it('sets secure host cookie and private response headers',async()=>{const r=await context.app.inject('/api/auth/state');expect(r.headers['set-cookie']).toContain('__Host-receipt=');expect(r.headers['set-cookie']).toContain('Secure');expect(r.headers['set-cookie']).toContain('HttpOnly');expect(r.headers['set-cookie']).toContain('SameSite=Lax');expect(r.headers['cache-control']).toContain('no-store');});
-  it.each(['/api/images/anything','/api/settings','/api/settings/chatgpt','/api/catalog','/api/receipts','/api/auth/passkeys','/api/auth/sessions'])('blocks anonymous reads of %s',async(url)=>{expect((await request('GET',url)).statusCode).toBe(401)});
+  it.each(['/api/images/anything','/api/settings','/api/settings/chatgpt','/api/catalog','/api/recognition-model','/api/receipts','/api/auth/passkeys','/api/auth/sessions'])('blocks anonymous reads of %s',async(url)=>{expect((await request('GET',url)).statusCode).toBe(401)});
   it('rejects wrong origins and CSRF on recovery and upload',async()=>{expect((await request('POST','/api/auth/recover',{code:'x'.repeat(30)},{origin:'https://evil.test'})).statusCode).toBe(403);expect((await request('POST','/api/receipts',{}, {'x-csrf-token':'forged'})).statusCode).toBe(403);});
   it('initialization token is atomic and one-time',async()=>{const t=context.store.adminToken('bootstrap');const responses=await Promise.all([request('POST','/api/auth/bootstrap',{token:t}),request('POST','/api/auth/bootstrap',{token:t})]);expect(responses.map(r=>r.statusCode).sort()).toEqual([200,400]);});
   it('bootstrap closes once owner is created',async()=>{const t=context.store.adminToken('bootstrap');context.store.run('INSERT INTO owner VALUES(1,?,?)',token(),now());expect((await request('POST','/api/auth/bootstrap',{token:t})).statusCode).toBe(409);expect(()=>context.store.adminToken('bootstrap')).toThrow();});
@@ -33,4 +33,12 @@ it('uploads eight ordered images as individual requests and enforces version/cou
   expect(receipt.images.map((im:any)=>im.position)).toEqual([0,1,2,3,4,5,6,7]);expect(receipt.version).toBe(8);
   expect((await request('POST',`/api/receipts?receiptId=${receipt.id}&version=1`,body,headers)).statusCode).toBe(409);
   expect((await request('POST',`/api/receipts?receiptId=${receipt.id}&version=8`,body,headers)).statusCode).toBe(413);
+});
+
+
+it('exposes only the configured recognition model and provider to the homepage', async () => {
+  becomeOwner();
+  expect((await request('GET', '/api/recognition-model')).json()).toEqual({model:null});
+  context.store.setSetting('model', {provider:'api',model:'my-vision',apiKey:'secret-key',baseURL:'https://private.example',protocol:'responses',structured:true});
+  expect((await request('GET', '/api/recognition-model')).json()).toEqual({model:{provider:'api',model:'my-vision'}});
 });
