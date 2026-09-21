@@ -39,7 +39,7 @@ export function ReceiptUpload({ catalog, busy, run, open, onPendingChange }: {
   useEffect(() => { if (preview) dialog.current?.showModal(); }, [preview]);
   const release = (photo: Photo) => { URL.revokeObjectURL(photo.url); urls.current.delete(photo.url); };
   const select = (files: File[], replace?: number) => {
-    if (locked || !files.length) return;
+    if (working.current || locked || !files.length) return;
     if (photos.length + files.length - (replace === undefined ? 0 : 1) > 8) { setError('每张小票最多选择 8 张照片。'); return; }
     const invalid = files.find(file => !accept.split(',').includes(file.type) || file.size === 0 || file.size > 15 * 1024 * 1024);
     if (invalid) { setError(`${invalid.name}：请选择 JPG、PNG 或 WebP 图片，每张大于 0 且最多 15 MiB。`); return; }
@@ -48,6 +48,23 @@ export function ReceiptUpload({ catalog, busy, run, open, onPendingChange }: {
     else { release(photos[replace]); setPhotos(photos.map((photo, index) => index === replace ? added[0] : photo)); }
     setError('');
   };
+  useEffect(() => {
+    const paste = (event: ClipboardEvent) => {
+      if (event.defaultPrevented || working.current || locked || preview || dialog.current?.open) return;
+      const target = event.target;
+      if (target instanceof HTMLElement && (target.closest('input, textarea') || target.isContentEditable)) return;
+      const files = Array.from(event.clipboardData?.files || []).filter(file => file.type.startsWith('image/'));
+      if (!files.length) return;
+      event.preventDefault();
+      select(files.map(file => {
+        if (file.name.trim()) return file;
+        const extension = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp' }[file.type];
+        return new File([file], `clipboard-${crypto.randomUUID()}${extension ? `.${extension}` : ''}`, { type: file.type, lastModified: file.lastModified });
+      }));
+    };
+    window.addEventListener('paste', paste);
+    return () => window.removeEventListener('paste', paste);
+  });
   const upload = () => {
     if (working.current || locked) return;
     working.current = true;
@@ -88,6 +105,7 @@ export function ReceiptUpload({ catalog, busy, run, open, onPendingChange }: {
     <div className="upload-images">
       <div className="section-heading"><div><span className="eyebrow">记录一笔开支</span><h2>添加一张小票</h2></div><span className={`selection-count ${photos.length ? 'selected' : ''}`} role="status">{photos.length ? `✓ 已选择 ${photos.length} 张` : '通常 1–2 张照片'}</span></div>
       <p className="muted">拍下整张小票；长小票可补充照片，按顺序一起识别。</p>
+      <p className="muted small">支持 Ctrl+V / ⌘V 粘贴图片</p>
       {photos.length ? <div className={`photo-grid ${photos.length === 1 ? 'single-photo' : ''}`}>{photos.map((photo, index) => <article className="photo-card" key={photo.id}>
         <button className="photo-preview" aria-label={`查看第 ${index + 1} 张照片`} onClick={() => setPreview(photo)}><img src={photo.url} alt={`已选择的小票第 ${index + 1} 张`} onError={() => { setPhotos(current => current.map(p => p.id === photo.id ? { ...p, invalid: true } : p)); setError('图片读取失败，请替换或删除对应照片。'); }} /><span className="photo-number">{String(index + 1).padStart(2, '0')}</span><span className="photo-zoom">查看大图 ↗</span></button>
         <div className="photo-caption"><strong title={photo.file.name}>{photo.file.name}</strong><small>{photo.invalid ? '图片读取失败' : index < (saved?.count || 0) ? '✓ 已上传' : `${photo.file.size < 1024 * 1024 ? `${Math.ceil(photo.file.size / 1024)} KiB` : `${(photo.file.size / 1024 / 1024).toFixed(1)} MiB`} · 待上传`}</small></div>
