@@ -8,8 +8,10 @@
 - 通过 Passkey、恢复码、CSRF 校验和短期敏感操作验证保护账户。
 - 支持 ChatGPT 订阅的 Codex 模式，以及兼容 OpenAI Responses / Chat Completions 的 API。
 - Actual 写入使用稳定提交 ID、重复候选检查、串行子进程和写入后回读核验。
-- 原图与识别预览在入账后进入清理队列。
-- 首页选图后即时预览，支持补充照片、替换、删除和调整顺序；一次点击即可上传并开始识别。
+- 支持 JPG、PNG、WebP 和 HEIC 小票；上传图片会转为完整分辨率的 WebP 档案图，入账后长期保留档案图并清理识别预览。
+- 首页选图后即时预览，浏览器无法显示 HEIC 时展示文件占位；支持补充照片、替换、删除和调整顺序，一次点击即可上传并开始识别。
+- 按 Actual 账本记忆最近使用的付款账户，切换回来时自动预选有效账户。
+- 入账历史按当前 Actual 账本隔离，设置页可以永久清理其他账本的本地记录。
 - 首页展示当前模型名称。识别状态栏展示模型、已用时间及实际处理阶段；Codex 模式接入思考、生成和搜索事件，兼容 API 模式展示请求与结果处理阶段。
 
 同一次上传的照片会合并为一笔小票，适合整张小票或长小票的分段照片。上传中断后可继续补传到已保存草稿，识别失败可在原草稿重试。
@@ -19,6 +21,7 @@
 ## 快速启动
 
 需要 Docker Engine、Docker Compose 插件和 OpenSSL。
+Docker 镜像已包含 HEIC 转换工具；直接在宿主机运行服务时需安装 `heif-convert`，建议使用 libheif 1.19 或更新版本（Debian Bookworm 可从 backports 安装 `libheif-examples` 与 `libheif-plugin-libde265`）。
 
 ```sh
 git clone https://github.com/qxzg/actual-receipts.git
@@ -71,6 +74,14 @@ docker compose down
 ```sh
 docker compose exec receipt-app node dist/server/admin.js recover
 ```
+
+服务器管理员可以永久清理当前 Actual 连接之外的本地已入账记录：
+
+```sh
+docker compose exec receipt-app node dist/server/admin.js purge-old-ledgers --confirm
+```
+
+该命令保留 Actual 中的交易，并由应用清理队列删除对应的小票应用记录与图片。
 
 ## 开发
 

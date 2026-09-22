@@ -35,7 +35,11 @@ export async function createApp(config: Config, overrides: { store?: Store; actu
     reply.code(status).send({ error: status === 429 ? '操作较频繁，请稍后重试' : safeError(error) });
   });
   app.get('/healthz', async () => { store.get('SELECT 1'); return { ok: true }; });
-  app.get('/api/catalog', async () => actual.catalog());
+  app.get('/api/catalog', async () => {
+    const catalog = await actual.catalog(), connection = actual.connection();
+    const preferred = store.setting<string>(`last-account:${connection}`);
+    return { ...catalog, defaultAccount: preferred && catalog.accounts.some(account => account.id === preferred) ? preferred : undefined };
+  });
   app.get('/api/recognition-model', async () => {
     const settings = store.setting<ModelSettings>('model');
     return { model: settings ? { provider: settings.provider, model: settings.model } : null };
@@ -43,7 +47,8 @@ export async function createApp(config: Config, overrides: { store?: Store; actu
   app.get('/api/settings', async () => {
     const a = store.setting<ActualSettings>('actual'), m = store.setting<ModelSettings>('model');
     return { actual: a ? { ...a, password: '', budgetPassword: '', hasPassword: !!a.password, hasBudgetPassword: !!a.budgetPassword } : null,
-      model: m ? { ...m, apiKey: '', hasKey: !!m.apiKey } : null };
+      model: m ? { ...m, apiKey: '', hasKey: !!m.apiKey } : null,
+      otherLedgerReceiptCount: a ? service.otherLedgerReceiptCount(actual.connection(a)) : 0 };
   });
   const actualInput = (body: unknown) => {
     const a = actualSettingsSchema.parse(body), prev = store.setting<ActualSettings>('actual');
@@ -99,6 +104,7 @@ export async function createApp(config: Config, overrides: { store?: Store; actu
     if (uploading) fail('正在处理上传，请稍后重试', 429);
     const query = z.object({ account: z.string().max(100).default(''), receiptId: z.string().uuid().optional(), version: z.coerce.number().int().optional() }).parse(req.query);
     const existing = query.receiptId ? service.receipt(query.receiptId) : undefined;
+    const uploadConnection = store.setting<ActualSettings>('actual') ? actual.connection() : null;
     if (existing && (!['draft', 'failed'].includes(existing.status) || existing.version !== query.version || store.get('SELECT id FROM submissions WHERE receipt_id=?', existing.id))) fail('草稿已更新或正在处理，请刷新后重试', 409);
     const startPosition = existing?.images.length || 0;
     if (startPosition >= 8) fail('每张小票最多 8 张图片', 413);
@@ -116,6 +122,7 @@ export async function createApp(config: Config, overrides: { store?: Store; actu
       }
       if (position === startPosition) fail('请选择小票图片');
       store.run("UPDATE receipts SET status='draft',error=NULL,version=version+?,updated_at=? WHERE id=?", existing ? 1 : 0, now(), receiptID);
+      if (!existing && uploadConnection && query.account) store.setSetting(`last-account:${uploadConnection}`, query.account);
       return reply.code(201).send(service.receipt(receiptID));
     } catch (e) {
       if (existing) {
@@ -126,13 +133,17 @@ export async function createApp(config: Config, overrides: { store?: Store; actu
     } finally { uploading = false; }
   });
   app.get('/api/receipts', async (req) => {
-    const q = z.object({ keyword: z.string().max(200).default(''), from: z.string().max(10).default(''), to: z.string().max(10).default(''), status: z.string().max(30).default(''), offset: z.coerce.number().int().min(0).max(100000).default(0) }).parse(req.query);
+    const q = z.object({ keyword: z.string().max(200).default(''), from: z.string().max(10).default(''), to: z.string().max(10).default(''), status: z.string().max(30).default(''), ledger: z.enum(['all', 'current']).default('all'), offset: z.coerce.number().int().min(0).max(100000).default(0) }).parse(req.query);
     const clauses = ["status!='deleting'"], args: any[] = [];
+    if (q.ledger === 'current') { clauses.push('(NOT EXISTS (SELECT 1 FROM submissions WHERE submissions.receipt_id=receipts.id) OR EXISTS (SELECT 1 FROM submissions WHERE submissions.receipt_id=receipts.id AND submissions.connection=?))'); args.push(actual.connection()); }
     if (q.keyword) { clauses.push("(instr(lower(json_extract(draft,'$.merchant')),lower(?))>0 OR EXISTS(SELECT 1 FROM json_each(json_extract(receipts.draft,'$.items')) WHERE instr(lower(json_extract(value,'$.name')),lower(?))>0))"); args.push(q.keyword, q.keyword); }
     if (q.from) { clauses.push("json_extract(draft,'$.date')>=?"); args.push(q.from); }
     if (q.to) { clauses.push("json_extract(draft,'$.date')<=?"); args.push(q.to); }
     if (q.status) { clauses.push('status=?'); args.push(q.status); }
     return store.all(`SELECT id,version,status,created_at,updated_at,error,cleanup,transaction_id,json_extract(draft,'$.merchant') AS merchant,json_extract(draft,'$.date') AS date,json_extract(draft,'$.total') AS total,json_extract(draft,'$.currency') AS currency FROM receipts WHERE ${clauses.join(' AND ')} ORDER BY created_at DESC LIMIT 50 OFFSET ?`, ...args, q.offset);
+  });
+  app.post('/api/receipts/purge-old-ledgers', async (req) => {
+    recent(req); z.object({ confirmed: z.literal(true) }).parse(req.body); return service.purgeOtherLedgers();
   });
   app.get('/api/receipts/:id', async (req) => service.receipt((req.params as any).id));
   app.put('/api/receipts/:id', async (req) => { const body = z.object({ version: z.number().int(), draft: draftSchema }).parse(req.body); return service.save((req.params as any).id, body.version, body.draft); });
@@ -149,9 +160,9 @@ export async function createApp(config: Config, overrides: { store?: Store; actu
   });
   app.get('/api/images/:id', async (req, reply) => {
     const image = store.get('SELECT images.* FROM images JOIN receipts ON receipts.id=images.receipt_id WHERE images.id=? AND receipts.status!=\'deleting\'', (req.params as any).id); if (!image) fail('图片已清理或不存在', 404);
-    const original = (req.query as any).original === '1', path = original ? image.path : image.thumbnail;
+    const original = (req.query as any).original === '1', path = original || !existsSync(image.thumbnail) ? image.path : image.thumbnail;
     if (!existsSync(path)) fail('图片已清理', 404);
-    if (original) { const meta = await sharp(path).metadata(); reply.type(meta.format === 'jpeg' ? 'image/jpeg' : `image/${meta.format}`); } else reply.type('image/jpeg');
+    const meta = await sharp(path).metadata(); reply.type(meta.format === 'jpeg' ? 'image/jpeg' : `image/${meta.format}`);
     reply.header('Content-Disposition', 'inline'); return reply.send(createReadStream(path));
   });
   const publicDir = resolve('dist/public');

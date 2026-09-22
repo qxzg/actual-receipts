@@ -8,6 +8,7 @@ import { ReceiptService } from '../src/server/service';
 import { buildTransaction, transactionMatches } from '../src/server/actual';
 import { cleanupImages } from '../src/server/images';
 import { emptyDraft, allocate } from '../src/shared/receipt';
+import sharp from 'sharp';
 let store: Store, dir: string, svc: ReceiptService, actual: any, writes: any[], receiptID: string, draft: any;
 beforeEach(() => {
   dir=mkdtempSync(join(tmpdir(),'receipt-test-')); store=new Store(dir,Buffer.alloc(32,1)); writes=[];
@@ -43,10 +44,21 @@ describe('submission and recovery',()=>{
   it('stops retry when a new duplicate appears',async()=>{
     const r=svc.receipt(receiptID); await svc.submit(receiptID,1,r.submission_id); store.run("UPDATE submissions SET status='writing'");svc.recover();actual.duplicates=async()=>[{id:'new'}]; await expect(svc.retrySubmission(receiptID)).rejects.toThrow('重复候选');expect(writes).toHaveLength(0);
   });
-  it('leaves images on error and clears them only after independent readback',async()=>{
-    const imageDir=join(dir,'images',receiptID);mkdirSync(imageDir,{recursive:true}); const path=join(imageDir,'test.jpg');writeFileSync(path,'image');store.run('INSERT INTO images VALUES(?,?,?,?,?)',id(),receiptID,0,path,path);
+  it('keeps images on error and retains a full-resolution WebP archive after independent readback',async()=>{
+    const imageDir=join(dir,'images',receiptID);mkdirSync(imageDir,{recursive:true}); const imageID=id(), path=join(imageDir,'test.original'), thumbnail=join(imageDir,'test-preview.jpg');
+    await sharp({create:{width:321,height:654,channels:3,background:'#ffffff'}}).jpeg().toFile(path); await sharp(path).resize({width:160}).jpeg().toFile(thumbnail); store.run('INSERT INTO images VALUES(?,?,?,?,?)',imageID,receiptID,0,path,thumbnail);
     const r=svc.receipt(receiptID);await svc.submit(receiptID,1,r.submission_id); actual.verify=async()=>({found:false,valid:false});await (svc as any).runSubmission();await cleanupImages(store);expect(existsSync(path)).toBe(true);
-    actual.verify=async(t:any)=>({found:true,valid:true,id:t.id});await svc.verify(receiptID);await cleanupImages(store);expect(existsSync(path)).toBe(false);expect(svc.receipt(receiptID).cleanup).toBe('done');expect(svc.receipt(receiptID).draft.items).toHaveLength(1);
+    actual.verify=async(t:any)=>({found:true,valid:true,id:t.id});await svc.verify(receiptID);await cleanupImages(store);
+    const archived=store.get('SELECT path,thumbnail FROM images WHERE id=?',imageID); expect(archived.path).toMatch(/\.webp$/); expect(existsSync(archived.path)).toBe(true); expect(existsSync(path)).toBe(false); expect(existsSync(thumbnail)).toBe(false);
+    expect(await sharp(archived.path).metadata()).toMatchObject({format:'webp',width:321,height:654}); expect(svc.receipt(receiptID).cleanup).toBe('done');expect(svc.receipt(receiptID).draft.items).toHaveLength(1);
+  });
+  it('purges completed records from other ledgers and preserves the current ledger record',async()=>{
+    const r=svc.receipt(receiptID);await svc.submit(receiptID,1,r.submission_id);await (svc as any).runSubmission();
+    const oldReceipt=id(),oldSubmission=id(),oldDir=join(dir,'images',oldReceipt),time=now();mkdirSync(oldDir,{recursive:true});writeFileSync(join(oldDir,'archive.webp'),'archive');
+    store.run("INSERT INTO receipts(id,status,draft,created_at,updated_at,submission_id,cleanup) VALUES(?,'posted',?,?,?,?,'done')",oldReceipt,JSON.stringify(draft),time,time,oldSubmission);
+    store.run("INSERT INTO submissions(id,receipt_id,version,status,snapshot,allocation,transaction_id,connection,error,created_at,updated_at) VALUES(?,?,1,'synced',?,?,?,?,NULL,?,?)",oldSubmission,oldReceipt,JSON.stringify({draft}),JSON.stringify(allocate(draft)),id(),'old-connection',time,time);
+    expect(svc.otherLedgerReceiptCount()).toBe(1);expect(svc.purgeOtherLedgers()).toEqual({scheduled:1});expect(()=>svc.receipt(oldReceipt)).toThrow('不存在');
+    await cleanupImages(store);expect(store.get('SELECT id FROM receipts WHERE id=?',oldReceipt)).toBeUndefined();expect(store.get('SELECT id FROM submissions WHERE id=?',oldSubmission)).toBeUndefined();expect(existsSync(oldDir)).toBe(false);expect(svc.receipt(receiptID).status).toBe('posted');
   });
   it('parent/child verification detects rule-modified notes, category and amount',()=>{
     const t=buildTransaction(draft,allocate(draft),'sub','parent');expect(transactionMatches(t,t)).toBe(true); const changed=structuredClone(t);changed.subtransactions[0].category='wrong';expect(transactionMatches(changed,t)).toBe(false);expect(t.amount).toBe(-101);expect(t.subtransactions[0].notes).toContain('Test item');

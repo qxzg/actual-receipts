@@ -47,7 +47,7 @@ test('real WebAuthn registration, recognition, scoped allocation, duplicate conf
   await page.setViewportSize({width:390,height:844});await page.screenshot({path:'artifacts/mobile-review.png',fullPage:true});
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth)).toBe(true);
   await page.getByRole('button',{name:/小票原图/}).click();await expect(page.getByAltText('小票第 1 张')).toBeVisible();await page.getByRole('button',{name:'商品明细',exact:true}).click();
-  await page.getByRole('button',{name:/核对完成，写入 Actual/}).click();await expect(page.getByText(/已写入 Actual ·/)).toBeVisible({timeout:15000});await expect(page.getByText(/图片已清理，商品明细已保留/)).toBeVisible({timeout:15000});
+  await page.getByRole('button',{name:/核对完成，写入 Actual/}).click();await expect(page.getByText(/已写入 Actual ·/)).toBeVisible({timeout:15000});await expect(page.getByText(/小票图片与商品明细已保留/)).toBeVisible({timeout:15000});await expect(page.getByRole('button',{name:'小票原图（2）'})).toBeVisible();
   const posted = await (await page.request.get('/__test/transactions')).json();
   expect(posted[0].subtransactions.map((i:any)=>i.notes)).toEqual(['Diet Coke 7.5flozx10x4','Foster Farms Free Range Chicken Thighs 3.2lb $1.40/lb']);
   expect(posted[0].amount).toBe(-1296);

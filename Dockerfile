@@ -11,6 +11,10 @@ RUN npm run build && npm prune --omit=dev
 FROM ${NODE_IMAGE} AS app
 ENV NODE_ENV=production HOST=0.0.0.0 DATA_DIR=/data
 WORKDIR /app
+RUN echo 'deb http://deb.debian.org/debian bookworm-backports main' > /etc/apt/sources.list.d/bookworm-backports.list \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends -t bookworm-backports libheif-examples libheif-plugin-libde265 \
+    && rm -rf /var/lib/apt/lists/*
 COPY --from=build --chown=node:node /app/node_modules ./node_modules
 COPY --from=build --chown=node:node /app/dist ./dist
 COPY --chown=node:node package.json ./package.json

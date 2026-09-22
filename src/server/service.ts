@@ -12,6 +12,23 @@ export class ReceiptService {
   private cleaning = false;
   private recovering = false;
   constructor(public store: Store, public actual: ActualBridge, public recognizer: Recognizer, private key: Buffer) {}
+  otherLedgerReceiptCount(connection = this.actual.connection()) {
+    return this.store.get<{ n: number }>("SELECT count(*) AS n FROM receipts JOIN submissions ON submissions.receipt_id=receipts.id WHERE receipts.status='posted' AND submissions.status='synced' AND submissions.connection!=?", connection)?.n || 0;
+  }
+  purgeOtherLedgers() {
+    const connection = this.actual.connection();
+    if (this.store.get("SELECT submissions.id FROM submissions JOIN receipts ON receipts.id=submissions.receipt_id WHERE submissions.connection!=? AND submissions.status!='synced' LIMIT 1", connection)) fail('其他账本仍有待核验提交，请先恢复对应账本完成核验', 409);
+    const rows = this.store.all<{ id: string }>("SELECT receipts.id FROM receipts JOIN submissions ON submissions.receipt_id=receipts.id WHERE receipts.status='posted' AND submissions.status='synced' AND submissions.connection!=?", connection);
+    const time = now();
+    this.store.tx(() => {
+      for (const row of rows) {
+        this.store.run("UPDATE receipts SET status='deleting',cleanup='pending',updated_at=? WHERE id=?", time, row.id);
+        this.store.run('INSERT OR REPLACE INTO cleanup_queue(receipt_id,next_at,remove_record) VALUES(?,?,1)', row.id, time);
+      }
+      this.store.event(`receipts.other-ledgers.purge.${rows.length}`);
+    });
+    return { scheduled: rows.length };
+  }
   receipt(receiptID: string): Receipt {
     const row = this.store.get('SELECT * FROM receipts WHERE id=?', receiptID); if (!row || row.status === 'deleting') fail('小票记录不存在', 404);
     const draft = draftSchema.parse(JSON.parse(row.draft));

@@ -7,7 +7,7 @@ import { Store, fail, hash } from './db.js';
 import type { Draft, Allocation, Account, Category } from '../shared/receipt.js';
 export const actualSettingsSchema = z.object({ serverURL: z.url().max(500), password: z.string().max(2000), syncId: z.string().min(1).max(200), budgetPassword: z.string().max(2000).default(''), currency: z.enum(['USD', 'CNY', 'EUR', 'GBP', 'CAD', 'AUD', 'HKD', 'SGD']), testBudget: z.boolean() });
 export type ActualSettings = z.infer<typeof actualSettingsSchema>;
-export type Catalog = { accounts: Account[]; categories: Category[]; currency: string };
+export type Catalog = { accounts: Account[]; categories: Category[]; currency: string; defaultAccount?: string };
 export type Candidate = { id: string; date: string; amount: number; payee: string; notes: string };
 export class Serial {
   private tail: Promise<unknown> = Promise.resolve();

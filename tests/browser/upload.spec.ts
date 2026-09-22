@@ -1,4 +1,5 @@
 import { test, expect, type Page } from '@playwright/test';
+import { readFileSync } from 'node:fs';
 import sharp from 'sharp';
 import { allocate, emptyDraft, type Receipt } from '../../src/shared/receipt';
 
@@ -6,9 +7,9 @@ const model = { provider: 'codex', model: 'gpt-6-astra' };
 const draft = emptyDraft('USD', 'bank');
 const receipt = (): Receipt => ({ id:'receipt-one',version:1,status:'draft',draft:structuredClone(draft),images:[],created_at:Date.now(),updated_at:Date.now(),error:null,cleanup:'retained',transaction_id:null,submission_id:'submission',allocation:allocate(draft) });
 const photo = async (name = 'receipt-top.png') => ({ name,mimeType:'image/png',buffer:await sharp(Buffer.from('<svg width="480" height="760"><rect width="480" height="760" fill="#fffdf7"/><text x="45" y="85" font-family="monospace" font-size="28">NEIGHBORHOOD MARKET</text><path d="M45 115H435M45 430H435" stroke="#333" stroke-dasharray="5 5"/><text x="45" y="180" font-size="22">MILK                 7.98</text><text x="45" y="240" font-size="22">TOWEL                4.99</text><text x="45" y="300" font-size="22">DISCOUNT            -1.00</text><text x="45" y="360" font-size="22">TAX                   .99</text><text x="45" y="500" font-size="28">TOTAL     $12.96</text><text x="110" y="650" font-size="20">THANK YOU</text></svg>')).png().toBuffer() });
-async function home(page: Page) {
+async function home(page: Page, defaultAccount?: string) {
   await page.route('**/api/auth/state', r => r.fulfill({json:{authenticated:true,csrf:'test'}}));
-  await page.route('**/api/catalog', r => r.fulfill({json:{accounts:[{id:'bank',name:'日常银行卡'}],categories:[],currency:'USD'}}));
+  await page.route('**/api/catalog', r => r.fulfill({json:{accounts:[{id:'bank',name:'日常银行卡'}],categories:[],currency:'USD',defaultAccount}}));
   await page.route('**/api/recognition-model', r => r.fulfill({json:{model}}));
   await page.route('**/api/receipts?**', r => r.fulfill({json:[]}));
   await page.goto('/');
@@ -165,6 +166,40 @@ test('pastes a real clipboard screenshot with the keyboard and uploads it once',
   expect(uploads).toBe(1); expect(starts).toBe(1);
 });
 
+test('preselects the last account from the current ledger', async ({page}) => {
+  await home(page, 'bank');
+  await expect(page.getByLabel('付款账户',{exact:true})).toHaveValue('bank');
+});
+
+test('uploads HEIC when Chromium needs a file placeholder for preview', async ({page}) => {
+  await home(page);
+  const heic=readFileSync(new URL('../fixtures/synthetic.heic',import.meta.url));
+  const current=receipt(); let uploads=0;
+  await page.route('**/api/receipts?**',async route=>{
+    if(route.request().method()==='GET') return route.fulfill({json:[]});
+    uploads++;
+    const form=await new Response(new Uint8Array(route.request().postDataBuffer()!),{headers:{'content-type':route.request().headers()['content-type']}}).formData();
+    const uploaded=form.get('images') as File;
+    expect(uploaded.name).toBe('IMG_3275.HEIC');
+    expect(uploaded.type).toBe('image/heic');
+    expect(Buffer.from(await uploaded.arrayBuffer())).toEqual(heic);
+    current.images=[{id:'heic-image',position:0}];
+    await route.fulfill({json:current});
+  });
+  await page.route('**/api/receipts/receipt-one',route=>route.fulfill({json:current}));
+  await page.route('**/api/images/*',async route=>route.fulfill({contentType:'image/png',body:(await photo()).buffer}));
+  await page.route('**/api/receipts/receipt-one/recognize',route=>{current.status='queued';return route.fulfill({json:{jobId:'heic-job'}});});
+  await page.getByLabel('小票图片',{exact:true}).setInputFiles({name:'IMG_3275.HEIC',mimeType:'image/heic',buffer:heic});
+  await expect(page.locator('.photo-preview .photo-placeholder')).toBeVisible();
+  await page.getByRole('button',{name:'查看第 1 张照片'}).click();
+  await expect(page.getByRole('dialog',{name:'小票照片预览'})).toContainText('上传后可在核对页查看图片');
+  await page.keyboard.press('Escape');
+  await page.getByLabel('付款账户',{exact:true}).selectOption('bank');
+  await page.getByRole('button',{name:'上传并识别 →',exact:true}).click();
+  await expect(page.getByRole('status').filter({hasText:'等待识别'})).toBeVisible();
+  expect(uploads).toBe(1);
+});
+
 test('single photo, supplemental photo, preview, reorder and selection validation', async ({page}) => {
   await home(page);
   const first = await photo(), second = await photo('receipt-bottom.png');
@@ -185,7 +220,7 @@ test('single photo, supplemental photo, preview, reorder and selection validatio
   await page.getByLabel('替换第 1 张照片').setInputFiles(await photo('replacement.png'));
   await expect(page.locator('.photo-card').first()).toContainText('replacement.png');
   await page.getByLabel('小票图片',{exact:true}).setInputFiles({name:'document.pdf',mimeType:'application/pdf',buffer:Buffer.from('invalid')});
-  await expect(page.getByRole('alert')).toContainText('JPG、PNG 或 WebP');
+  await expect(page.getByRole('alert')).toContainText('JPG、PNG、WebP 或 HEIC');
   await expect(page.locator('.photo-card')).toHaveCount(2);
   await page.getByLabel('小票图片',{exact:true}).setInputFiles({name:'large.png',mimeType:'image/png',buffer:Buffer.alloc(15*1024*1024+1)});
   await expect(page.getByRole('alert')).toContainText('15 MiB');
