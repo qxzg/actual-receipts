@@ -16,7 +16,7 @@ async function createArchive(source: string, dir: string, imageID: string) {
   const archive = join(dir, imageID + '.webp'), temporary = archive + '.tmp';
   for (const quality of archiveQualities) {
     await rm(temporary, { force: true });
-    await sharp(source, { limitInputPixels: 32_000_000, failOn: 'warning' }).rotate().webp({ quality, effort: 6, smartSubsample: true }).toFile(temporary);
+    await sharp(source, { limitInputPixels: 32_000_000, failOn: 'warning' }).rotate().webp({ quality, effort: 6 }).toFile(temporary);
     if ((await stat(temporary)).size <= archiveTarget || quality === archiveQualities.at(-1)) break;
   }
   await rename(temporary, archive);
