@@ -99,22 +99,26 @@ export class Recognizer {
   }
 }
 
-export function normalizeModels(data: unknown, provider: 'api' | 'codex'): ModelOption[] {
-  const parsed = z.object({data:z.array(z.object({id:z.string().min(1).max(150),name:z.string().max(200).optional(),isDefault:z.boolean().optional(),inputModalities:z.array(z.string()).nullable().optional(),architecture:z.object({input_modalities:z.array(z.string()).optional()}).optional()})).max(5000)}).safeParse(data);
+export function normalizeModels(data: unknown): ModelOption[] {
+  const parsed = z.object({ data: z.array(z.object({
+    id: z.string().min(1).max(150), name: z.string().max(200).nullish(), description: z.string().max(4000).nullish(),
+    isDefault: z.boolean().optional(), hidden: z.boolean().optional(), inputModalities: z.array(z.string()).nullish(),
+    architecture: z.object({ input_modalities: z.array(z.string()).optional() }).optional(),
+  })).max(5000) }).safeParse(data);
   if (!parsed.success) fail('服务商返回的模型列表格式无效', 502);
   const seen = new Set<string>();
   return parsed.data.data.flatMap(m => {
-    if (provider === 'codex' && ['gpt-5.4','gpt-5.4-mini','gpt-5.2','gpt-5.3-codex'].includes(m.id)) return [];
-    if (seen.has(m.id)) return []; seen.add(m.id);
+    if (m.hidden || seen.has(m.id)) return [];
     const modalities = m.inputModalities || m.architecture?.input_modalities;
     const vision = modalities ? modalities.includes('image') : null;
-    if (vision === false || provider === 'api' && /(^|[-/])(embedding|tts|whisper|transcribe|realtime|moderation|dall-e|sora)(-|$)/i.test(m.id)) return [];
-    return [{id:m.id,name:m.name || m.id,description:modelDescription(m.id,vision),isDefault:!!m.isDefault,vision}];
-  }).sort((a,b)=>Number(b.isDefault)-Number(a.isDefault) || a.name.localeCompare(b.name));
+    if (vision === false) return [];
+    seen.add(m.id);
+    return [{id:m.id,name:m.name?.trim() || m.id,description:m.description?.trim() || modelDescription(vision),isDefault:!!m.isDefault,vision}];
+  }).sort((a,b)=>Number(b.isDefault)-Number(a.isDefault));
 }
 export async function listAPIModels(baseURL: string, apiKey: string): Promise<ModelOption[]> {
   const url = new URL(baseURL);
   if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash) fail('模型地址请使用 HTTPS');
-  const response = await fetch(`${url.href.replace(/\/$/,'')}/models`, {headers:{authorization:`Bearer ${apiKey}`},signal:AbortSignal.timeout(15000),redirect:'error'});
-  return normalizeModels(await readJson(response), 'api');
+  const response = await fetch(`${url.href.replace(/\/$/,'')}/models`, {headers:{authorization:`Bearer ${apiKey}`},cache:'no-store',signal:AbortSignal.timeout(15000),redirect:'error'});
+  return normalizeModels(await readJson(response));
 }

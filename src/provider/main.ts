@@ -4,6 +4,7 @@ import { timingSafeEqual } from 'node:crypto';
 import { z } from 'zod';
 import { enrichmentInputSchema, enrichmentOutputSchema, enrichmentPrompt } from '../shared/enrichment.js';
 import { CodexRPC } from './rpc.js';
+import { listCodexModels } from './models.js';
 import type { RecognitionStage } from '../shared/progress.js';
 const token = readFileSync(process.env.PROVIDER_TOKEN_FILE || '/run/secrets/provider-token', 'utf8').trim();
 if (token.length < 32) throw new Error('Internal token is too short');
@@ -28,15 +29,9 @@ app.post('/progress', async req => {
 });
 app.get('/status', async () => { const rpc = await getAuth(); const account = await rpc.call('account/read', { refreshToken: true }); return { account: account.account, requiresOpenaiAuth: account.requiresOpenaiAuth, busy }; });
 app.get('/models', async (_req, reply) => {
-  const rpc = await getAuth();
-  const account = await rpc.call('account/read', { refreshToken: false });
-  if (!account.account) return reply.code(401).send({ error: '请先完成 ChatGPT 授权' });
-  const data: any[] = []; let cursor: string | undefined;
-  do {
-    const page = await rpc.call('model/list', { includeHidden: false, ...(cursor ? { cursor } : {}) });
-    data.push(...page.data); cursor = page.nextCursor || undefined;
-  } while (cursor && data.length < 500);
-  return { data: data.slice(0, 500).map(m => ({ id: m.model, name: m.displayName, isDefault: !!m.isDefault, inputModalities: m.inputModalities || null })) };
+  const data = await listCodexModels();
+  if (!data) return reply.code(401).send({ error: '请先完成 ChatGPT 授权' });
+  return { data };
 });
 app.post('/login', async (_req, reply) => { if (busy) return reply.code(409).send({ error: '请等待识别完成' }); const rpc = await getAuth(); return rpc.call('account/login/start', { type: 'chatgptDeviceCode' }); });
 app.post('/logout', async (_req, reply) => { if (busy) return reply.code(409).send({ error: '请等待识别完成' }); const rpc = await getAuth(); return rpc.call('account/logout', {}); });

@@ -1,4 +1,5 @@
 ARG NODE_IMAGE=node:24.20.0-bookworm-slim
+ARG CODEX_VERSION=0.167.2
 
 FROM ${NODE_IMAGE} AS build
 WORKDIR /app
@@ -24,11 +25,12 @@ USER node
 CMD ["node", "dist/server/main.js"]
 
 FROM app AS provider
+ARG CODEX_VERSION
 USER root
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
-    && npm install --prefix /app/codex --omit=dev --save-exact @openai/codex@0.153.4 \
+    && npm install --prefix /app/codex --omit=dev --save-exact @openai/codex@${CODEX_VERSION} \
     && install -d -o node -g node -m 700 /data/codex
 ENV CODEX_HOME=/data/codex CODEX_BIN=/app/codex/node_modules/.bin/codex
 USER node

@@ -32,7 +32,7 @@
 
 识别为持久化任务，单并发执行，保存失败原因并保留旧草稿。重新识别有覆盖确认。模型输出经 Zod 严格检查，分类按实际账本校验，税费与疑点要求用户核对。
 
-API 模式支持 Chat Completions、Responses、JSON Schema/JSON 模式。模型从服务商 `/models` 或 Codex `model/list` 动态获取，以带中文说明的下拉列表选择；已明确为文本输入或已停用的订阅模型会被过滤。兼容服务商缺少图片能力元数据时，界面要求图片测试确认。Codex 模式使用固定 0.153.4 的 App Server stdio 协议；每次识别启动临时进程和 ephemeral thread，关闭 shell、unified exec 和联网搜索，拒绝所有服务端工具与审批请求。内部认证 HTTP 路由提供授权、状态、识别和商品查询。Codex 镜像包含公共 CA 根证书，用于验证 HTTPS。模型容器仅挂载独立 Codex 登录目录，Actual 凭据和业务数据由网页服务管理。
+API 模式支持 Chat Completions、Responses、JSON Schema/JSON 模式。设置加载完成后，模型从服务商 `/models` 或 Codex `model/list` 动态获取，使用服务器返回的名称、说明和默认模型；说明缺失时按图片能力显示通用提示。筛选依据为服务器提供的可见性和输入能力。API 地址或密钥修改后经防抖自动刷新，旧请求随配置切换取消；手动刷新也重新请求服务端。当前列表中的有效选择允许保存，获取失败时显示错误。兼容服务商缺少图片能力元数据时，界面要求图片测试确认。Codex 模式使用 0.167.2 的 App Server stdio 协议（构建时可通过 CODEX_VERSION 更新组件版本）；模型目录查询使用独立进程并在请求结束时关闭。App Server 的目录受 CLI 版本影响，新模型发布后需同步维护该组件。每次识别启动临时进程和 ephemeral thread，关闭 shell、unified exec 和联网搜索，拒绝所有服务端工具与审批请求。内部认证 HTTP 路由提供授权、状态、识别和商品查询。Codex 镜像包含公共 CA 根证书，用于验证 HTTPS。模型容器仅挂载独立 Codex 登录目录，Actual 凭据和业务数据由网页服务管理。
 
 ### 商品补全与备注
 
@@ -56,5 +56,5 @@ Item.product 为兼容旧草稿的可选元数据；新模型输出要求完整�
 
 - [Actual 官方 API](https://actualbudget.org/docs/api/reference/)，并核验安装包 26.9.0 的实现与类型。
 - [SimpleWebAuthn 服务端](https://simplewebauthn.dev/docs/packages/server)，服务器 14.0.1、浏览器 14.0.0。
-- [Codex App Server](https://learn.chatgpt.com/docs/app-server)，协议按 Codex 0.153.4 生成类型核对。
+- [Codex App Server](https://learn.chatgpt.com/docs/app-server)，协议按 Codex 0.167.2 生成类型核对。
 - [Responses API](https://platform.openai.com/docs/api-reference/responses)，使用图片输入与 JSON Schema 输出。

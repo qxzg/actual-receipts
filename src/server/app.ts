@@ -69,7 +69,7 @@ export async function createApp(config: Config, overrides: { store?: Store; actu
   });
   app.post('/api/settings/models', async (req) => {
     const body = z.object({provider:z.enum(['api','codex']),baseURL:z.string().max(500).optional(),apiKey:z.string().max(4000).optional()}).parse(req.body);
-    if (body.provider === 'codex') return {models:normalizeModels(await providerCall(config,'/models'),'codex')};
+    if (body.provider === 'codex') return {models:normalizeModels(await providerCall(config,'/models'))};
     recent(req);
     const saved = store.setting<ModelSettings>('model');
     const baseURL = body.baseURL || '';

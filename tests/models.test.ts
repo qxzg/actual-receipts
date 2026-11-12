@@ -24,24 +24,32 @@ it('keeps a 300-item draft valid when every suggested category is unknown', asyn
 });
 
 describe('model dropdown catalog', () => {
-  it('lists image models, removes duplicates and retired subscription models, default first', () => {
-    const models=normalizeModels({data:[{id:'gpt-5.6-luna',inputModalities:['text','image']},{id:'text-only',inputModalities:['text']},{id:'gpt-6-astra',isDefault:true,inputModalities:['text','image']},{id:'gpt-5.6-luna'},{id:'gpt-5.4-mini',inputModalities:['image']}]},'codex');
-    expect(models.map(m=>m.id)).toEqual(['gpt-6-astra','gpt-5.6-luna']);
-    expect(models.every(m=>m.description.length>5)).toBe(true);
+  it('uses server metadata for new and previously filtered model IDs, default first', () => {
+    const models=normalizeModels({data:[{id:'future-vision',name:'New Vision',description:'Live server description',inputModalities:['text','image']},{id:'text-only',inputModalities:['text']},{id:'server-default',isDefault:true,inputModalities:['text','image']},{id:'future-vision'},{id:'gpt-5.4-mini',inputModalities:['image']},{id:'hidden-vision',hidden:true,inputModalities:['image']}]});
+    expect(models.map(m=>m.id)).toEqual(['server-default','future-vision','gpt-5.4-mini']);
+    expect(models[1]).toMatchObject({name:'New Vision',description:'Live server description',vision:true});
   });
-  it('marks unknown API image support honestly and filters specialized models', () => {
-    const models=normalizeModels({data:[{id:'vendor-vision'},{id:'text-embedding-3-small'},{id:'gpt-5.4-mini'}]},'api');
-    expect(models.map(m=>m.id)).toContain('gpt-5.4-mini');
-    expect(models.find(m=>m.id==='vendor-vision')).toMatchObject({vision:null,description:'服务商提供的模型，选择后请测试图片能力。'});
-    expect(models.map(m=>m.id)).not.toContain('text-embedding-3-small');
+  it('uses capability metadata and generic guidance when descriptions are empty', () => {
+    const models=normalizeModels({data:[{id:'vendor-vision',name:null,description:' '},{id:'embedding-vision',architecture:{input_modalities:['text','image']}},{id:'audio-only',architecture:{input_modalities:['audio']}},{id:'audio-only',inputModalities:['image']}]});
+    expect(models.map(m=>m.id)).toEqual(['vendor-vision','embedding-vision','audio-only']);
+    expect(models[0]).toMatchObject({name:'vendor-vision',vision:null,description:'服务商提供的模型，选择后请测试图片能力。'});
+    expect(models[1].vision).toBe(true);
   });
   it('fetches a compatible API catalog without returning the key', async () => {
     const f=vi.spyOn(globalThis,'fetch').mockResolvedValue(new Response(JSON.stringify({data:[{id:'vision-model'}]})));
     const result=await listAPIModels('https://vendor.example/v1/','secret-key');
-    expect(f).toHaveBeenCalledWith('https://vendor.example/v1/models',expect.objectContaining({headers:{authorization:'Bearer secret-key'},redirect:'error'}));
+    expect(f).toHaveBeenCalledWith('https://vendor.example/v1/models',expect.objectContaining({headers:{authorization:'Bearer secret-key'},cache:'no-store',redirect:'error'}));
     expect(JSON.stringify(result)).not.toContain('secret-key');
   });
-  it('rejects malformed catalog responses',()=>{expect(()=>normalizeModels({data:[{id:5}]},'api')).toThrow('格式无效')});
+  it('requests the current upstream catalog on each refresh', async () => {
+    const f=vi.spyOn(globalThis,'fetch')
+      .mockResolvedValueOnce(new Response(JSON.stringify({data:[{id:'first-release'}]})))
+      .mockResolvedValueOnce(new Response(JSON.stringify({data:[{id:'new-release'}]})));
+    expect((await listAPIModels(settings.baseURL,settings.apiKey)).map(m=>m.id)).toEqual(['first-release']);
+    expect((await listAPIModels(settings.baseURL,settings.apiKey)).map(m=>m.id)).toEqual(['new-release']);
+    expect(f).toHaveBeenCalledTimes(2);
+  });
+  it('rejects malformed catalog responses',()=>{expect(()=>normalizeModels({data:[{id:5}]})).toThrow('格式无效')});
 });
 
 

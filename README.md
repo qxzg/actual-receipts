@@ -7,6 +7,7 @@
 - 金额以整数百分之一单位计算，支持商品优惠、整单优惠、税费、小费和费用分摊。
 - 通过 Passkey、恢复码、CSRF 校验和短期敏感操作验证保护账户。
 - 支持 ChatGPT 订阅的 Codex 模式，以及兼容 OpenAI Responses / Chat Completions 的 API。
+- 设置页自动从服务器获取模型列表，采用服务商返回的名称、说明和默认模型；API 地址或密钥修改后自动刷新，也可手动刷新。Codex 模型目录由运行中的 CLI 提供，部署使用 0.167.2，可通过 Docker 构建参数 `CODEX_VERSION` 维护组件版本。
 - Actual 写入使用稳定提交 ID、重复候选检查、串行子进程和写入后回读核验。
 - 支持 JPG、PNG、WebP 和 HEIC 小票；上传图片会转为完整分辨率的 WebP 档案图，入账后长期保留档案图并清理识别预览。
 - 首页选图后即时预览，浏览器无法显示 HEIC 时展示文件占位；支持补充照片、替换、删除和调整顺序，一次点击即可上传并开始识别。
@@ -41,7 +42,7 @@ docker compose exec receipt-app node dist/server/admin.js bootstrap
 
 1. 填写自己的 Actual 服务器地址、密码和账本 Sync ID。
 2. 先选择独立测试账本并执行连接测试。
-3. 选择 ChatGPT 订阅或兼容 API，获取模型列表并执行图片能力测试。
+3. 选择 ChatGPT 订阅或兼容 API，完成授权或填写 API 地址和密钥，从自动获取的模型列表中选择模型，保存后执行图片能力测试。
 4. 上传测试小票，核对商品、优惠、税费范围和实付总额。
 
 容器访问宿主机上的 Actual 时，可填写 `http://host.docker.internal:5006`。公网 Actual 实例建议使用有效的 HTTPS 地址。
